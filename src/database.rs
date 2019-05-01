@@ -162,7 +162,7 @@ impl Database {
 
     pub fn restore_file_metadata(&self, file: &mut File) -> R<()> {
         let k = Key::for_file(file);
-        if let Some(v) = self.db.get(&k).map_err(E::RocksError)? {
+        if let Some(v) = self.db.get(k.as_ref()).map_err(E::RocksError)? {
             let f: File = deserialize(&*v).map_err(move |e| E::DecodeError(e, k.0))?;
             file.dimensions = f.dimensions;
             file.cache_sizes = f.cache_sizes;
@@ -178,13 +178,13 @@ impl Database {
 
         {
             let k = Key::for_thumb(file, size);
-            self.db.put(&k, data).map_err(E::RocksError)?;
+            self.db.put(k.as_ref(), data).map_err(E::RocksError)?;
         }
 
         {
             let k = Key::for_file(file);
             let v: Vec<u8> = serialize(file).map_err(move |e| E::EncodeError(e, file.clone()))?;
-            self.db.put(&k, &v).map_err(E::RocksError)?;
+            self.db.put(k.as_ref(), &v).map_err(E::RocksError)?;
         }
 
         Ok(())
@@ -201,7 +201,7 @@ impl Database {
 
         Ok(Data(
             self.db
-                .get(&k)
+                .get(k.as_ref())
                 .map_err(E::RocksError)?
                 .ok_or_else(move || E::MissingData(k.0))?,
         ))

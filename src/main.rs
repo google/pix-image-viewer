@@ -15,7 +15,6 @@
 #![feature(async_await)]
 #![feature(fnbox)]
 #![feature(await_macro)]
-#![feature(futures_api)]
 #![feature(arbitrary_self_types)]
 #![recursion_limit = "1000"]
 #![feature(vec_remove_item)]
