@@ -9,6 +9,10 @@ license = "Apache-2.0"
 readme = "README.md"
 description = "Desktop image viewer. Arranges images in a zoomable, pannable grid."
 
+[[bin]]
+name = "pix"
+path = "src/main.rs"
+
 [dependencies]
 piston = "0.42.0"
 piston_window = "0.89.0"
