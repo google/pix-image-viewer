@@ -1,8 +1,13 @@
 [package]
-name = "pix"
+name = "pix-image-viewer"
 version = "0.1.0"
 authors = ["Mason Larobina <masonl@google.com>"]
 edition = "2018"
+homepage = "https://github.com/google/pix-image-viewer"
+repository = "https://github.com/google/pix-image-viewer"
+license = "Apache-2.0"
+readme = "README.md"
+description = "Desktop image viewer. Arranges images in a zoomable, pannable grid."
 
 [dependencies]
 piston = "0.40.0"
