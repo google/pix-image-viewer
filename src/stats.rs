@@ -99,9 +99,9 @@ impl<'a> ScopedDuration<'a> {
         }
     }
 
-    pub fn elapsed(&self) -> Duration {
-        self.instant.elapsed()
-    }
+    //pub fn elapsed(&self) -> Duration {
+    //    self.instant.elapsed()
+    //}
 }
 
 impl<'a> Drop for ScopedDuration<'a> {

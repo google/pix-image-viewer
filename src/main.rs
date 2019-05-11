@@ -20,6 +20,7 @@
 #![feature(vec_remove_item)]
 #![feature(drain_filter)]
 #![feature(stmt_expr_attributes)]
+#![allow(unused_imports)]
 
 #[macro_use]
 extern crate log;
@@ -29,11 +30,13 @@ extern crate serde_derive;
 extern crate failure;
 
 use crate::stats::ScopedDuration;
+use ::image::GenericImage;
 use ::image::GenericImageView;
 use boolinator::Boolinator;
 use clap::Arg;
 use piston_window::*;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::ops::Bound::*;
 use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -45,13 +48,25 @@ mod database;
 mod queue;
 mod stats;
 
-fn npow2(i: u32) -> u32 {
-    if i.is_power_of_two() {
-        i
-    } else {
-        i.next_power_of_two()
-    }
+#[derive(Debug, Fail)]
+pub enum E {
+    #[fail(display = "rocksdb error: {:?}", 0)]
+    RocksError(rocksdb::Error),
+
+    #[fail(display = "decode error {:?}", 0)]
+    DecodeError(bincode::Error),
+
+    #[fail(display = "encode error {:?}", 0)]
+    EncodeError(bincode::Error),
+
+    #[fail(display = "missing data for key {:?}", 0)]
+    MissingData(String),
+
+    #[fail(display = "image error: {:?}", 0)]
+    ImageError(::image::ImageError),
 }
+
+type R<T> = std::result::Result<T, E>;
 
 #[derive(Debug, Default)]
 struct View {
@@ -106,7 +121,7 @@ impl View {
         let pixels_per_image = (self.w * self.h) / self.num_tiles as f64;
         self.zoom = pixels_per_image.sqrt().floor();
 
-        self.lw = (self.w / self.zoom).floor() as i64;
+        self.lw = std::cmp::max(1, (self.w / self.zoom).floor() as i64);
         self.lh = (self.num_tiles as f64 / self.lw as f64).ceil() as i64;
 
         // Numer of rows takes the overflow, rescale to ensure the grid fits the window.
@@ -147,8 +162,8 @@ impl View {
         self.zoom *= 1.0 + r;
 
         // min size
-        if self.zoom < 4.0 {
-            self.zoom = 4.0;
+        if self.zoom < 8.0 {
+            self.zoom = 8.0;
         }
 
         let zd = self.zoom - z;
@@ -185,138 +200,259 @@ impl View {
     }
 }
 
-#[derive(Debug)]
-struct Image {
-    w: u32,
-    h: u32,
-    data: G2dTexture,
-    is_original: bool,
+fn u32u8(size: u32) -> u8 {
+    assert!(size.is_power_of_two());
+    (32 - size.leading_zeros() - 1) as u8
 }
 
-impl Image {
-    fn from_vec(data: &[u8], factory: &mut GfxFactory) -> Self {
-        let _s = ScopedDuration::new("image_from");
-        let image = ::image::load_from_memory(data).expect("load image");
-        Self::from_image(false, image, factory)
-    }
+fn u8u32(size: u8) -> u32 {
+    1 << size
+}
 
-    fn from_image(
-        is_original: bool,
-        image: ::image::DynamicImage,
-        factory: &mut GfxFactory,
-    ) -> Self {
-        let _s = ScopedDuration::new("image_from");
+#[test]
+fn size_conversions() {
+    assert_eq!(u32u8(128), 7);
+    assert_eq!(u8u32(7), 128);
+}
 
-        let (w, h) = image.dimensions();
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Metadata {
+    // Can be larger for large images if the tile coordinates don't fit within a u8.
+    //
+    // See tile_spec_for_image_size.
+    target_tile_size: u8,
 
-        let data = Texture::from_image(factory, &image.to_rgba(), &TextureSettings::new())
-            .expect("texture");
+    sizes: Vec<(u32, u32)>,
 
-        Self {
-            w,
-            h,
-            data,
-            is_original,
-        }
-    }
+    tiles: Vec<u64>,
+    // TODO: hints for garbage collection
+}
 
+#[derive(Debug)]
+struct Thumb<'a> {
+    // image metadata
+    w: u32,
+    h: u32,
+    // tile metadata
+    wc: u8,
+    hc: u8,
+    tile_size: u32,
+    tiles: &'a [u64],
+}
+
+impl<'a> Thumb<'a> {
     fn max_dimension(&self) -> u32 {
         std::cmp::max(self.w, self.h)
     }
 
-    fn cur_size(&self) -> u32 {
-        npow2(self.max_dimension())
+    fn size(&self) -> u32 {
+        self.max_dimension().next_power_of_two()
     }
 }
 
-struct Thumb {
-    // cache fill
-    thumbs: Vec<(u32, Vec<u8>)>,
-    // metadata
-    dimensions: (u32, u32),
-    // use directly
-    image: ::image::DynamicImage,
-    is_original: bool,
-}
+impl Metadata {
+    fn shrink_to_fit(&mut self) {
+        self.sizes.shrink_to_fit();
+        self.tiles.shrink_to_fit();
+    }
 
-fn make_thumb(file: Arc<File>, make_size: u32) -> Option<Thumb> {
-    let _s = ScopedDuration::new("make_thumb");
+    fn thumbs(&self) -> Vec<Thumb> {
+        let mut ret = Vec::new();
 
-    assert!(make_size.is_power_of_two());
+        let mut start = 0;
 
-    match ::image::open(&file.path) {
-        Ok(original) => {
-            let (w, h) = original.dimensions();
-            let max_dimension = npow2(std::cmp::max(w, h));
-            let make_size = std::cmp::min(make_size, max_dimension);
+        let target_tile_size = u8u32(self.target_tile_size);
 
-            let mut make_sizes: BTreeSet<u32> = [32, 64, 128, 256]
-                .iter()
-                .cloned()
-                .filter(|i| !file.cache_sizes.contains(i))
-                .collect();
+        for &(w, h) in self.sizes.iter() {
+            let (tile_size, wc, hc) = tile_spec_for_image_size(target_tile_size, w, h);
 
-            make_sizes.insert(make_size);
+            let num_tiles = wc as usize * hc as usize;
 
-            let mut thumbs = Vec::new();
+            let end = start + num_tiles;
 
-            let mut image = Some((true, original));
+            let tiles = &self.tiles[start..end];
 
-            let mut image_ret = None;
-
-            for &size in make_sizes.iter().rev() {
-                let mut data = Vec::new();
-
-                if size < max_dimension {
-                    let (_, img) = image
-                        .as_ref()
-                        .or(image_ret.as_ref())
-                        .expect("image or image_ret");
-                    image = Some((false, img.thumbnail(size, size)));
-                }
-
-                image
-                    .as_ref()
-                    .or(image_ret.as_ref())
-                    .expect("img")
-                    .1
-                    .write_to(&mut data, ::image::ImageFormat::JPEG)
-                    .expect("write_to");
-
-                thumbs.push((size, data));
-
-                if size == make_size {
-                    image_ret = image.take();
-                }
+            // Sanity checking.
+            {
+                let mut sizes: Vec<u8> =
+                    tiles.iter().map(|&id| deconstruct_tile_id(id).0).collect();
+                sizes.dedup();
+                assert_eq!(sizes.len(), 1);
+                assert_eq!(tiles.len(), num_tiles);
             }
 
-            let (is_original, image) = image_ret.expect("image ret");
+            ret.push(Thumb {
+                w,
+                h,
+                tile_size,
+                wc,
+                hc,
+                tiles,
+            });
 
-            Some(Thumb {
-                thumbs,
-                dimensions: (w, h),
-                image,
-                is_original,
-            })
+            start = end;
         }
 
-        Err(e) => {
-            error!("Open image error: {:?}: {:?}", file.path, e);
-            None
-        }
+        ret
     }
+}
+
+trait Nearest<T> {
+    fn nearest(&self, target_size: u32) -> usize;
+}
+
+impl<'a> Nearest<Thumb<'a>> for Vec<Thumb<'a>> {
+    fn nearest(&self, target_size: u32) -> usize {
+        let mut found = None;
+
+        for (i, thumb) in self.iter().enumerate() {
+            let size = thumb.size();
+            let dist = (target_size as i64 - size as i64).abs();
+            if let Some((found_dist, found_i)) = found.take() {
+                if dist < found_dist {
+                    found = Some((dist, i));
+                } else {
+                    found = Some((found_dist, found_i));
+                }
+            } else {
+                found = Some((dist, i));
+            }
+        }
+
+        let (_, i) = found.unwrap();
+        i
+    }
+}
+
+fn tile_spec_for_image_size(size: u32, w: u32, h: u32) -> (u32, u8, u8) {
+    // overflow check
+    assert!(size.is_power_of_two());
+
+    let wc = (w + size - 1) / size;
+    let hc = (h + size - 1) / size;
+
+    if wc < 256 && hc < 256 {
+        (size, wc as u8, hc as u8)
+    } else {
+        tile_spec_for_image_size(size << 1, w, h)
+    }
+}
+
+#[test]
+fn tile_counts_test() {
+    assert_eq!(tile_spec_for_image_size(256, 1, 1), (256, 1, 1));
+    assert_eq!(tile_spec_for_image_size(256, 256, 256), (256, 1, 1));
+    assert_eq!(tile_spec_for_image_size(256, 257, 256), (256, 2, 1));
+    assert_eq!(tile_spec_for_image_size(256, 257, 257), (256, 2, 2));
+}
+
+fn make_thumb(file: Arc<File>, uid: u64) -> R<(Metadata, BTreeMap<u64, Vec<u8>>)> {
+    let _s = ScopedDuration::new("make_thumb");
+
+    let mut image = ::image::open(&file.path).map_err(E::ImageError)?;
+
+    let (w, h) = image.dimensions();
+
+    let target_tile_size = TARGET_TILE_SIZE;
+
+    let orig_bucket = std::cmp::max(w, h).next_power_of_two();
+
+    let min_bucket = std::cmp::min(MIN_SIZE, orig_bucket);
+
+    let mut bucket = orig_bucket;
+
+    let mut metadata_tmp: Vec<((u32, u32), Vec<u64>)> = Vec::new();
+
+    let mut tiles: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
+
+    while min_bucket <= bucket {
+        let current_bucket = {
+            let (w, h) = image.dimensions();
+            std::cmp::max(w, h).next_power_of_two()
+        };
+
+        // Downsample if needed.
+        if bucket < current_bucket {
+            image = image.thumbnail(bucket, bucket);
+        }
+
+        let (w, h) = image.dimensions();
+
+        let (tile_size, wc, hc) = tile_spec_for_image_size(target_tile_size, w, h);
+
+        let lossy = bucket != orig_bucket;
+
+        let mut ids = Vec::new();
+
+        let mut chunk_id = 0u16;
+
+        for y in 0..(hc as u32) {
+            let (min_y, max_y) = (y * tile_size, std::cmp::min((y + 1) * tile_size, h));
+
+            for x in 0..(wc as u32) {
+                let (min_x, max_x) = (x * tile_size, std::cmp::min((x + 1) * tile_size, w));
+
+                let sub_image = ::image::DynamicImage::ImageRgba8(
+                    image
+                        .sub_image(min_x, min_y, max_x - min_x, max_y - min_y)
+                        .to_image(),
+                );
+
+                let format = if lossy {
+                    ::image::ImageOutputFormat::JPEG(70)
+                } else {
+                    ::image::ImageOutputFormat::JPEG(100)
+                };
+
+                let mut buf = Vec::with_capacity((2 * tile_size * tile_size) as usize);
+                sub_image.write_to(&mut buf, format).expect("write_to");
+
+                let tile_id = make_tile_id(u32u8(bucket), uid, chunk_id);
+                chunk_id += 1;
+
+                tiles.insert(tile_id, buf);
+
+                ids.push(tile_id);
+            }
+        }
+
+        metadata_tmp.push(((w, h), ids));
+
+        // Next size down.
+        bucket >>= 1;
+    }
+
+    let mut metadata = Metadata {
+        target_tile_size: u32u8(target_tile_size),
+        sizes: Vec::new(),
+        tiles: Vec::new(),
+    };
+
+    for (dims, ids) in metadata_tmp.into_iter().rev() {
+        metadata.sizes.push(dims);
+        metadata.tiles.extend_from_slice(&ids);
+    }
+
+    metadata.shrink_to_fit();
+
+    Ok((metadata, tiles))
 }
 
 static UPS: u64 = 100;
 
-static MIN_SIZE: u32 = 32;
+// TODO: make flag
+static MIN_SIZE: u32 = 8;
+
+// TODO: make flag
+static TARGET_TILE_SIZE: u32 = 128;
 
 static UPSIZE_FACTOR: f64 = 1.5;
 
 struct App<'a> {
     db: &'a database::Database,
 
-    files: &'a mut [Arc<File>],
+    files: &'a [Arc<File>],
+    metadata: &'a mut [Option<Metadata>],
 
     // TODO: Embed in self.textures?
     sizes: Vec<u32>,
@@ -324,13 +460,15 @@ struct App<'a> {
     // Files ordered by distance from the mouse.
     mouse_order_xy: (f64, f64),
 
+    // Errors
     skip: HashSet<usize>,
 
     // Graphics state
     new_window_settings: Option<WindowSettings>,
     window_settings: WindowSettings,
     window: PistonWindow,
-    textures: BTreeMap<usize, Image>,
+
+    tiles: BTreeMap<u64, G2dTexture>,
 
     // Movement state & modes.
     view: View,
@@ -341,18 +479,22 @@ struct App<'a> {
     cache_todo: [VecDeque<usize>; 2],
 
     thumb_todo: [VecDeque<usize>; 2],
-    thumb_runner: queue::Queue<Option<Thumb>>,
+    thumb_runner: queue::Queue<R<(Metadata, BTreeMap<u64, Vec<u8>>)>>,
 
     shift_held: bool,
 
     should_recalc: Option<()>,
+
+    base_id: u64,
 }
 
 impl<'a> App<'a> {
     fn new(
-        files: &'a mut [Arc<File>],
+        files: &'a [Arc<File>],
+        metadata: &'a mut [Option<Metadata>],
         db: &'a database::Database,
         thumbnailer_threads: u32,
+        base_id: u64,
     ) -> Self {
         let view = View::new(files.len());
 
@@ -376,7 +518,8 @@ impl<'a> App<'a> {
             new_window_settings: None,
             window_settings,
             window,
-            textures: BTreeMap::new(),
+
+            tiles: BTreeMap::new(),
 
             view,
             panning: false,
@@ -400,6 +543,9 @@ impl<'a> App<'a> {
             should_recalc: Some(()),
 
             files,
+            metadata,
+
+            base_id,
         }
     }
 
@@ -412,7 +558,7 @@ impl<'a> App<'a> {
 
             self.window_settings = new.clone();
             self.window = new.build().expect("window build");
-            self.textures.clear();
+            self.tiles.clear();
 
             self.should_recalc = Some(());
 
@@ -422,91 +568,84 @@ impl<'a> App<'a> {
         }
     }
 
-    fn zoom_size(&self) -> u32 {
-        std::cmp::max(MIN_SIZE, npow2((self.view.zoom * UPSIZE_FACTOR) as u32))
+    fn target_size(&self) -> u32 {
+        ((self.view.zoom * UPSIZE_FACTOR) as u32).next_power_of_two()
     }
 
-    fn next_cache_op(&mut self) -> Option<(usize, u32)> {
-        let _s = ScopedDuration::new("next_cache_op");
+    fn load_tile_from_db(&mut self, now: &SystemTime) -> bool {
+        let _s = ScopedDuration::new("load_tile_from_db");
 
+        let target_size = self.target_size();
+
+        // visible first
         for p in 0..self.cache_todo.len() {
+            // at most one pass through the list.
+            // TODO
             for _ in 0..self.cache_todo[p].len() {
-                if let Some(i) = self.cache_todo[p].pop_front() {
-                    self.thumb_todo[p].push_back(i);
+                let i = self.cache_todo[p].pop_front().unwrap();
 
-                    let file = &self.files[i];
-                    if let Some(max_dimension) = file.max_dimension() {
-                        let max_size = npow2(max_dimension);
-
-                        // TODO: move into function
-                        let target_size = if p == 0 {
-                            std::cmp::min(self.zoom_size(), max_size)
-                        } else {
-                            1
-                        };
-
-                        let cur_size = self.textures.get(&i).map(Image::cur_size);
-
-                        if let Some(cache_size) = file.nearest_cache_size(cur_size, target_size) {
-                            return Some((i, cache_size));
-                        }
-                    }
-                }
-            }
-        }
-
-        return None;
-    }
-
-    fn next_thumb_op(&mut self) -> Option<(usize, u32)> {
-        let _s = ScopedDuration::new("next_thumb_ob");
-
-        for p in 0..self.thumb_todo.len() {
-            for _ in 0..self.thumb_todo[p].len() {
-                if let Some(i) = self.thumb_todo[p].pop_front() {
-                    // Skip for now, it is re-inserted later.
-                    if self.thumb_runner.inflight(i) {
+                let metadata = match &self.metadata[i] {
+                    Some(metadata) => metadata,
+                    None => {
+                        // No metadata found, thus no thumbnails to load. Move it into the thumb
+                        // queue to be thumbnailed.
+                        self.thumb_todo[p].push_back(i);
                         continue;
                     }
+                };
 
-                    let file = &self.files[i];
+                let mut thumbs = metadata.thumbs();
 
-                    let zoom_size = self.zoom_size();
+                // If visible
+                if p == 0 {
+                    let n = thumbs.nearest(target_size);
+                    thumbs.swap(0, n);
+                }
 
-                    if let Some(max_dimension) = file.max_dimension() {
-                        let max_size = npow2(max_dimension);
-                        let target_size = std::cmp::min(zoom_size, max_size);
-
-                        let img = self.textures.get(&i);
-
-                        if p == 0 {
-                            // Should load original?
-                            if target_size == max_size {
-                                if img.map(|i| i.is_original).unwrap_or(false) {
-                                    assert_eq!(Some(max_dimension), img.map(Image::max_dimension));
-                                    continue;
-                                }
-                                return Some((i, max_size));
-                            }
-
-                            if Some(target_size) == img.map(Image::cur_size) {
+                for (j, thumb) in thumbs.iter().enumerate() {
+                    for &tile in thumb.tiles {
+                        // visible & target chunks
+                        if p == 0 && j == 0 {
+                            // Already loaded.
+                            if self.tiles.contains_key(&tile) {
                                 continue;
                             }
 
-                            return Some((i, target_size));
+                            // load the tile from the cache
+                            let _s3 = ScopedDuration::new("load_tile");
+
+                            let data = self.db.get(tile).expect("db get").expect("missing tile");
+
+                            let image = ::image::load_from_memory(&data).expect("load image");
+
+                            // TODO: Would be great to move off thread.
+                            let image = Texture::from_image(
+                                &mut self.window.factory,
+                                &image.to_rgba(),
+                                &TextureSettings::new(),
+                            )
+                            .expect("texture");
+
+                            self.tiles.insert(tile, image);
+
+                            // Check if we've exhausted our time budget (we are in the main
+                            // thread).
+                            if now.elapsed().unwrap() > std::time::Duration::from_millis(10) {
+                                // There might still be work to be done, resume from here next
+                                // time.
+                                self.cache_todo[p].push_front(i);
+                                return true;
+                            }
+                        } else {
+                            // Unload
+                            self.tiles.remove(&tile);
                         }
-
-                        assert!(!file.cache_sizes.is_empty());
-                        continue;
                     }
-
-                    let target_size = if p == 0 { zoom_size } else { MIN_SIZE };
-                    return Some((i, target_size));
                 }
             }
         }
 
-        return None;
+        return false;
     }
 
     fn enqueue(&mut self, i: usize) {
@@ -515,90 +654,58 @@ impl<'a> App<'a> {
         self.cache_todo[p].push_front(i);
     }
 
-    fn request_cache(&mut self) -> bool {
-        if let Some((i, cache_size)) = self.next_cache_op() {
-            let s = ScopedDuration::new("request_cache");
-
-            let data = match self.db.get(&self.files[i], cache_size) {
-                Ok(data) => data,
-                Err(e) => {
-                    error!("db get error {:?}", e);
-                    return false;
-                }
-            };
-
-            // TODO: Load large thumbs offthread?
-            let texture = Image::from_vec(&data, &mut self.window.factory);
-            self.set_texture(i, texture);
-
-            assert_eq!(self.sizes[i], cache_size);
-            stats::record(&format!("request_cache_{:05}", cache_size), s.elapsed());
-
-            true
-        } else {
-            false
-        }
-    }
-
-    fn request_thumb(&mut self) -> bool {
+    fn enqueue_thumb_op(&mut self) {
         if self.thumb_runner.is_full() {
-            return false;
+            return;
         }
 
-        if let Some((i, target_size)) = self.next_thumb_op() {
-            let _s = ScopedDuration::new("request_thumb");
+        let _s = ScopedDuration::new("enqueue_thumb_op");
 
-            let files = Arc::clone(&self.files[i]);
-            let work_fn = Box::new(move || make_thumb(files, target_size));
+        for p in 0..self.thumb_todo.len() {
+            for _ in 0..self.thumb_todo[p].len() {
+                let i = self.thumb_todo[p].pop_front().unwrap();
 
-            self.thumb_runner.send(i, work_fn);
+                // Already fetching.
+                if self.thumb_runner.inflight(i) {
+                    continue;
+                }
 
-            true
-        } else {
-            false
+                let tile_id_index = self.base_id + i as u64;
+
+                let file = Arc::clone(&self.files[i]);
+                let work_fn = Box::new(move || make_thumb(file, tile_id_index));
+                self.thumb_runner.send(i, work_fn);
+                return;
+            }
         }
     }
 
-    fn recv_thumb(&mut self) -> bool {
-        if let Some((i, thumb_opt)) = self.thumb_runner.recv() {
-            let s = ScopedDuration::new("recv_thumb");
+    fn recv_thumb(&mut self) {
+        if let Some((i, res)) = self.thumb_runner.recv() {
+            let _s = ScopedDuration::new("recv_thumb");
 
-            if let Some(thumb) = thumb_opt {
-                let mut f = Arc::get_mut(&mut self.files[i]).expect("get mut");
-
-                f.dimensions = Some(thumb.dimensions);
-
-                for (size, data) in thumb.thumbs {
-                    if let Err(e) = self.db.set(f, size, &data) {
-                        error!("db set error: {:?}", e);
-                    }
+            if let Ok((metadata, tiles)) = res {
+                // Do before metadata write to prevent invalid metadata references.
+                for (id, tile) in tiles {
+                    self.db.set(id, &tile).expect("db set");
                 }
 
-                let texture =
-                    Image::from_image(thumb.is_original, thumb.image, &mut self.window.factory);
-                self.set_texture(i, texture);
+                self.db
+                    .set_metadata(&*self.files[i], &metadata)
+                    .expect("set metadata");
 
-                // Recheck incase target size has changed.
+                self.metadata[i] = Some(metadata);
+
+                // Load the tiles.
                 self.enqueue(i);
-
-                stats::record(&format!("recv_thumb_{:05}", self.sizes[i]), s.elapsed());
             } else {
                 self.skip.insert(i);
             }
-            true
-        } else {
-            false
         }
     }
 
-    fn set_texture(&mut self, i: usize, texture: Image) {
-        let size = npow2(texture.max_dimension());
-        self.sizes[i] = size;
-        self.textures.insert(i, texture);
-    }
-
     fn update(&mut self, args: &UpdateArgs) {
-        let _s = ScopedDuration::new("update");
+        let now = SystemTime::now();
 
         if let Some(z) = self.zooming {
             self.zoom_by(z * args.dt);
@@ -610,20 +717,12 @@ impl<'a> App<'a> {
             return;
         }
 
-        let time = Instant::now();
-        loop {
-            // TODO: Or use estimator to ensure computations fit within budget.
-            if time.elapsed().as_millis() > (1000 / UPS as u128) / 2 {
-                break;
-            }
-
-            // TODO: And unload images no longer visible to reduce memory usage.
-            if self.request_cache() || self.recv_thumb() || self.request_thumb() {
-                continue;
-            } else {
-                break;
-            }
+        if self.load_tile_from_db(&now) {
+            return;
         }
+
+        self.enqueue_thumb_op();
+        self.recv_thumb();
     }
 
     fn resize(&mut self, w: f64, h: f64) {
@@ -666,7 +765,8 @@ impl<'a> App<'a> {
         self.view.my = y;
 
         let (ox, oy) = self.mouse_order_xy;
-        let dist = ((x - ox) as u64).checked_pow(2).unwrap_or(0) + ((y - oy) as u64).checked_pow(2).unwrap_or(0);
+        let dist = ((x - ox) as u64).checked_pow(2).unwrap_or(0)
+            + ((y - oy) as u64).checked_pow(2).unwrap_or(0);
         let trigger_dist = std::cmp::max(50, self.view.zoom as u64);
         if dist > trigger_dist {
             self.should_recalc = Some(());
@@ -794,15 +894,14 @@ impl<'a> App<'a> {
     }
 
     fn draw_2d(
-        thumb_runner: &queue::Queue<Option<Thumb>>,
+        thumb_runner: &queue::Queue<R<(Metadata, BTreeMap<u64, Vec<u8>>)>>,
         e: &Event,
         c: Context,
         g: &mut G2d,
         view: &View,
-        textures: &BTreeMap<usize, Image>,
+        tiles: &BTreeMap<u64, G2dTexture>,
+        metadata: &[Option<Metadata>],
     ) {
-        let _s = ScopedDuration::new("draw_2d");
-
         clear([0.0, 0.0, 0.0, 1.0], g);
 
         let c = c.trans(view.x, view.y);
@@ -816,96 +915,114 @@ impl<'a> App<'a> {
         let missing_color = color::hex("888888");
         let op_color = color::hex("444444");
 
-        let og_color = color::hex("FF0000");
-
         for i in 0..view.num_tiles {
             let (x, y, is_visible) = view.coords(i);
             if !is_visible {
                 continue;
             }
 
-            let gap_px = 2.5;
-            let zoom = view.zoom * (view.zoom / (view.zoom + gap_px));
+            let zoom = view.zoom * (view.zoom / (view.zoom + 1.0));
 
             let loading = thumb_runner.inflight(i);
 
-            if let Some(img) = textures.get(&i) {
-                let max_dimension = img.max_dimension();
+            if let Some(metadata) = &metadata[i] {
+                let thumbs = metadata.thumbs();
 
-                let scale = zoom / (max_dimension as f64);
+                for t in thumbs {
+                    let max_dimension = t.max_dimension();
 
-                let (x_offset, y_offset) = (
-                    (max_dimension - img.w) as f64 / 2.0,
-                    (max_dimension - img.h) as f64 / 2.0,
-                );
-                let cx = x + (x_offset * scale);
-                let cy = y + (y_offset * scale);
+                    let scale = zoom / (max_dimension as f64);
 
-                let trans = c.transform.trans(cx, cy).scale(scale, scale);
-                image.draw(&img.data, &draw_state, trans, g);
+                    let (xo, yo) = (
+                        (max_dimension - t.w) as f64 / 2.0 * scale,
+                        (max_dimension - t.h) as f64 / 2.0 * scale,
+                    );
+                    assert!(xo == 0.0 || yo == 0.0);
 
-                if img.is_original {
-                    let trans = c.transform.trans(x, y);
-                    rectangle(og_color, [0.0, 0.0, 1.0, zoom], trans, g);
-                    rectangle(og_color, [0.0, 0.0, zoom, 1.0], trans, g);
-                    rectangle(og_color, [zoom - 1.0, 0.0, 1.0, zoom], trans, g);
-                    rectangle(og_color, [0.0, zoom - 1.0, zoom, 1.0], trans, g);
+                    let mut it = t.tiles.iter();
+
+                    for ty in 0..(t.hc as u32) {
+                        let ty = (ty * t.tile_size) as f64 * scale;
+
+                        for tx in 0..(t.wc as u32) {
+                            let tx = (tx * t.tile_size) as f64 * scale;
+
+                            let tile = it.next().unwrap();
+
+                            if let Some(texture) = tiles.get(tile) {
+                                let trans = c
+                                    .transform
+                                    .trans(x + xo + tx, y + yo + ty)
+                                    .scale(scale, scale);
+                                image.draw(texture, &draw_state, trans, g);
+                            }
+                        }
+                    }
                 }
-            } else if !loading {
-                let trans = c.transform.trans(x, y);
-                rectangle(missing_color, [zoom / 2.0, zoom / 2.0, 1.0, 1.0], trans, g);
-            }
-
-            if loading {
-                let trans = c.transform.trans(x, y);
-                rectangle(op_color, [0.0, 0.0, 1.0, zoom], trans, g);
-                rectangle(op_color, [0.0, 0.0, zoom, 1.0], trans, g);
-                rectangle(op_color, [zoom - 1.0, 0.0, 1.0, zoom], trans, g);
-                rectangle(op_color, [0.0, zoom - 1.0, zoom, 1.0], trans, g);
+            } else {
+                if loading {
+                    let trans = c.transform.trans(x, y);
+                    rectangle(op_color, [0.0, 0.0, 1.0, zoom], trans, g);
+                    rectangle(op_color, [0.0, 0.0, zoom, 1.0], trans, g);
+                    rectangle(op_color, [zoom - 1.0, 0.0, 1.0, zoom], trans, g);
+                    rectangle(op_color, [0.0, zoom - 1.0, zoom, 1.0], trans, g);
+                } else {
+                    let trans = c.transform.trans(x, y);
+                    rectangle(missing_color, [zoom / 2.0, zoom / 2.0, 1.0, 1.0], trans, g);
+                }
             }
         }
     }
 
     fn run(&mut self) {
-        let mut between_updates = None;
-
         loop {
             let _s = ScopedDuration::new("run_loop");
 
             self.rebuild_window();
 
             if let Some(e) = self.window.next() {
+                let _s = ScopedDuration::new("run_loop_next");
+
                 e.update(|args| {
-                    between_updates = None;
+                    let _s = ScopedDuration::new("update");
                     self.update(args);
-                    between_updates = Some(ScopedDuration::new("between_updates"));
                 });
 
-                e.resize(|w, h| self.resize(w, h));
+                e.resize(|w, h| {
+                    let _s = ScopedDuration::new("resize");
+                    self.resize(w, h)
+                });
 
                 e.mouse_scroll(|h, v| {
+                    let _s = ScopedDuration::new("mouse_scroll");
                     self.mouse_scroll(h, v);
                 });
 
                 e.mouse_cursor(|x, y| {
+                    let _s = ScopedDuration::new("mouse_cursor");
                     self.mouse_cursor(x, y);
                 });
 
                 e.mouse_relative(|dx, dy| {
+                    let _s = ScopedDuration::new("mouse_relative");
                     self.mouse_relative(dx, dy);
                 });
 
-                e.button(|b| self.button(b));
+                e.button(|b| {
+                    let _s = ScopedDuration::new("button");
+                    self.button(b)
+                });
 
                 // borrowck
                 let v = &self.view;
-                let t = &self.textures;
+                let t = &self.tiles;
                 let thumb_runner = &self.thumb_runner;
+                let metadata = &self.metadata;
                 self.window.draw_2d(&e, |c, g| {
-                    Self::draw_2d(thumb_runner, &e, c, g, v, t);
+                    let _s = ScopedDuration::new("draw_2d");
+                    Self::draw_2d(thumb_runner, &e, c, g, v, t, metadata);
                 });
             } else {
-                between_updates.take();
                 break;
             }
         }
@@ -914,45 +1031,10 @@ impl<'a> App<'a> {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct File {
+    // TODO: Use bstring?
     path: String,
-    last_modified_secs: u64,
-    byte_size: u64,
-    dimensions: Option<(u32, u32)>,
-    cache_sizes: BTreeSet<u32>,
-}
-
-impl File {
-    fn max_dimension(&self) -> Option<u32> {
-        if let Some((w, h)) = self.dimensions {
-            Some(std::cmp::max(w, h))
-        } else {
-            None
-        }
-    }
-
-    fn nearest_cache_size(&self, cur_size: Option<u32>, target_size: u32) -> Option<u32> {
-        let _s = ScopedDuration::new("nearest_cache_size");
-
-        let zeros = |i: u32| -> i32 { i.leading_zeros() as i32 };
-
-        assert!(target_size.is_power_of_two());
-        let target_zeros = zeros(target_size);
-
-        self.cache_sizes
-            .iter()
-            .fold(cur_size, |a, &b| {
-                if let Some(a) = a {
-                    if (target_zeros - zeros(a)).abs() < (target_zeros - zeros(b)).abs() {
-                        Some(a)
-                    } else {
-                        Some(b)
-                    }
-                } else {
-                    Some(b)
-                }
-            })
-            .filter(|&s| Some(s) != cur_size)
-    }
+    modified: u64,
+    file_size: u64,
 }
 
 fn find_images(dirs: Vec<String>) -> Vec<Arc<File>> {
@@ -988,9 +1070,9 @@ fn find_images(dirs: Vec<String>) -> Vec<Arc<File>> {
                 continue;
             }
 
-            let byte_size = metadata.len();
+            let file_size = metadata.len();
 
-            let last_modified_secs: u64 = metadata
+            let modified: u64 = metadata
                 .modified()
                 .expect("metadata modified")
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -1007,17 +1089,43 @@ fn find_images(dirs: Vec<String>) -> Vec<Arc<File>> {
 
             let file = File {
                 path,
-                byte_size,
-                last_modified_secs,
-                dimensions: None,
-                cache_sizes: BTreeSet::new(),
+                modified,
+                file_size,
             };
 
             ret.push(Arc::new(file));
         }
     }
 
+    ret.sort();
     ret
+}
+
+fn make_tile_id(size: u8, index: u64, chunk: u16) -> u64 {
+    assert!(index < (1u64 << 40));
+    (chunk as u64) | (index << 16) | ((size as u64) << 56)
+}
+
+#[allow(unused)]
+fn deconstruct_tile_id(tile_id: u64) -> (u8, u64, u16) {
+    let size = ((tile_id & 0xFF00000000000000u64) >> 56) as u8;
+    let index = (tile_id & 0x00FFFFFFFFFF0000u64) >> 16;
+    let chunk = (tile_id & 0x000000000000FFFFu64) as u16;
+    (size, index, chunk)
+}
+
+#[test]
+fn tile_id_test() {
+    assert_eq!(make_tile_id(0xFFu8, 0u64, 0u16), 0xFF00000000000000u64);
+    assert_eq!(
+        make_tile_id(0u8, 0xFFFFFFFFFFu64, 0u16),
+        0x00FFFFFFFFFF0000u64
+    );
+    assert_eq!(make_tile_id(0u8, 0u64, 0xFFFFu16), 0x000000000000FFFFu64);
+    assert_eq!(
+        make_tile_id(0xFFu8, 0u64, 0u16).to_be_bytes(),
+        [0xFF, 0, 0, 0, 0, 0, 0, 0]
+    );
 }
 
 fn main() {
@@ -1078,24 +1186,30 @@ fn main() {
     // RUN //
     /////////
 
-    let mut files = find_images(paths);
-    files.sort();
+    let files = find_images(paths);
 
     assert!(!files.is_empty());
     info!("Found {} images", files.len());
 
     let db = database::Database::open(&db_path).expect("db open");
+    let base_id = db.reserve(files.len());
 
-    for file in &mut files {
-        let f = Arc::get_mut(file).expect("file get mut");
-        if let Err(e) = db.restore_file_metadata(f) {
-            error!("failed to restore metadata {:?}", e);
-        }
+    let mut metadata: Vec<Option<Metadata>> = Vec::with_capacity(files.len());
+
+    for file in &files {
+        let opt = match db.get_metadata(&*file) {
+            Ok(opt) => opt,
+            Err(e) => {
+                error!("get metadata error: {:?}", e);
+                None
+            }
+        };
+        metadata.push(opt);
     }
 
     {
         let _s = ScopedDuration::new("uptime");
-        App::new(&mut files, &db, thumbnailer_threads).run();
+        App::new(&files, &mut metadata, &db, thumbnailer_threads, base_id).run();
     }
 
     if let Some(stats) = db.get_statistics() {

@@ -18,29 +18,14 @@ use crate::File;
 use bincode::{deserialize, serialize};
 use std::ops::Deref;
 
-static FILE_PREFIX: &str = "F";
-
-static THUMB_PREFIX: &str = "T";
+static MAX_ID: &'static [u8] = b"_MAX_ID";
+static METADATA_PREFIX: char = 'M';
+static TILE_PREFIX: char = 'T';
 
 // Mixed into all keys, bump when making breaking database format changes.
-static DB_VERSION: u32 = 1;
+static DB_VERSION: u32 = 2;
 
-#[derive(Debug, Fail)]
-pub enum E {
-    #[fail(display = "rocksdb error: {:?}", 0)]
-    RocksError(rocksdb::Error),
-
-    #[fail(display = "decode error {:?} for key {:?}", 0, 1)]
-    DecodeError(bincode::Error, String),
-
-    #[fail(display = "encode error {:?} for file {:?}", 0, 1)]
-    EncodeError(bincode::Error, File),
-
-    #[fail(display = "missing data for key {:?}", 0)]
-    MissingData(String),
-}
-
-type R<T> = std::result::Result<T, E>;
+use crate::{E, R};
 
 #[derive(Debug)]
 struct Key(String);
@@ -50,33 +35,24 @@ impl Key {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
-        let k = (
-            &file.path,
-            file.last_modified_secs,
-            file.byte_size,
-            DB_VERSION,
-        );
+        let k = (&file.path, file.modified, file.file_size, DB_VERSION);
         k.hash(&mut hasher);
         hasher.finish()
     }
 
     fn for_file(file: &File) -> Key {
         Self(format!(
-            "{}:{}:{}",
-            FILE_PREFIX,
+            "{}{}:{}",
+            METADATA_PREFIX,
             file.path,
             Self::hash_file(file)
         ))
     }
 
-    fn for_thumb(file: &File, size: u32) -> Key {
-        Self(format!(
-            "{}:{:04}:{}:{}",
-            THUMB_PREFIX,
-            size,
-            file.path,
-            Self::hash_file(file),
-        ))
+    fn for_thumb(uid: u64) -> [u8; 9] {
+        let mut k: [u8; 9] = [TILE_PREFIX as u8; 9];
+        (&mut k[1..9]).copy_from_slice(&uid.to_be_bytes());
+        k
     }
 }
 
@@ -92,29 +68,12 @@ fn key_for_file() {
     assert_eq!(
         Key::for_file(&File {
             path: String::from("/here"),
-            last_modified_secs: 1234,
-            byte_size: 456,
+            modified: 1234,
+            file_size: 456,
             ..Default::default()
         })
         .0,
-        "F:/here:16246155260862624421"
-    );
-}
-
-#[test]
-fn key_for_thumb() {
-    assert_eq!(
-        Key::for_thumb(
-            &File {
-                path: String::from("/here"),
-                last_modified_secs: 1234,
-                byte_size: 456,
-                ..Default::default()
-            },
-            128
-        )
-        .0,
-        "T:0128:/here:16246155260862624421"
+        "M/here:5289273993602405726"
     );
 }
 
@@ -147,8 +106,6 @@ impl Database {
         let mut block_options = rocksdb::BlockBasedOptions::default();
         block_options.set_block_size(1024 * 1024);
         block_options.set_lru_cache(1024 * 1024 * 1024);
-        // TODO: Still not sure if this works.
-        block_options.set_bloom_filter(10, false);
         opts.set_block_based_table_factory(&block_options);
 
         let db = rocksdb::DB::open(&opts, path)?;
@@ -160,50 +117,76 @@ impl Database {
         self.opts.get_statistics()
     }
 
-    pub fn restore_file_metadata(&self, file: &mut File) -> R<()> {
+    pub fn get_metadata(&self, file: &crate::File) -> R<Option<crate::Metadata>> {
+        let _s = ScopedDuration::new("get_metadata");
+
         let k = Key::for_file(file);
         if let Some(v) = self.db.get(k.as_ref()).map_err(E::RocksError)? {
-            let f: File = deserialize(&*v).map_err(move |e| E::DecodeError(e, k.0))?;
-            file.dimensions = f.dimensions;
-            file.cache_sizes = f.cache_sizes;
+            crate::stats::record(
+                "metadata_size_bytes",
+                std::time::Duration::from_micros(v.len() as u64),
+            );
+
+            let mut metadata: crate::Metadata = deserialize(&*v).map_err(E::DecodeError)?;
+            metadata.shrink_to_fit();
+
+            Ok(Some(metadata))
+        } else {
+            Ok(None)
         }
+    }
+
+    pub fn set_metadata(&self, file: &crate::File, metadata: &crate::Metadata) -> R<()> {
+        let _s = ScopedDuration::new("get_metadata");
+
+        let k = Key::for_file(file);
+
+        let encoded: Vec<u8> = serialize(metadata).map_err(E::EncodeError)?;
+
+        crate::stats::record(
+            "metadata_size_bytes",
+            std::time::Duration::from_micros(encoded.len() as u64),
+        );
+
+        self.db.put(k.as_ref(), encoded).map_err(E::RocksError)?;
+
         Ok(())
     }
 
-    pub fn set(&self, file: &mut File, size: u32, data: &[u8]) -> R<()> {
+    pub fn set(&self, uid: u64, data: &[u8]) -> R<()> {
         let _s = ScopedDuration::new("database_set");
 
-        assert!(size.is_power_of_two());
-        file.cache_sizes.insert(size);
-
-        {
-            let k = Key::for_thumb(file, size);
-            self.db.put(k.as_ref(), data).map_err(E::RocksError)?;
-        }
-
-        {
-            let k = Key::for_file(file);
-            let v: Vec<u8> = serialize(file).map_err(move |e| E::EncodeError(e, file.clone()))?;
-            self.db.put(k.as_ref(), &v).map_err(E::RocksError)?;
-        }
+        let k = Key::for_thumb(uid);
+        self.db.put(&k, data).map_err(E::RocksError)?;
 
         Ok(())
     }
 
-    pub fn get(&self, file: &File, size: u32) -> R<Data> {
+    pub fn get(&self, uid: u64) -> R<Option<Data>> {
         let _s = ScopedDuration::new("database_get");
 
-        assert!(size.is_power_of_two());
+        let k = Key::for_thumb(uid);
+        if let Some(v) = self.db.get(k.as_ref()).map_err(E::RocksError)? {
+            Ok(Some(Data(v)))
+        } else {
+            Ok(None)
+        }
+    }
 
-        assert!(file.cache_sizes.contains(&size));
+    // TODO: recycle old keys
+    pub fn reserve(&self, count: usize) -> u64 {
+        let max_id = self
+            .db
+            .get(MAX_ID)
+            .unwrap()
+            .map(|v| std::str::from_utf8(&v).unwrap().parse::<u64>().unwrap())
+            .unwrap_or(0);
 
-        let k = Key::for_thumb(file, size);
+        let next_max_id = max_id + count as u64;
+        assert!(next_max_id < (1u64 << 40));
 
-        Ok(Data(
-            self.db
-                .get(k.as_ref())
-                .map_err(E::RocksError)?
-                .ok_or_else(move || E::MissingData(k.0))?,
-        ))
+        self.db.put(MAX_ID, format!("{}", next_max_id)).unwrap();
+
+        std::dbg!(max_id)
     }
 }
