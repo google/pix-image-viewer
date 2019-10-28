@@ -31,6 +31,10 @@ use ::image::GenericImage;
 use ::image::GenericImageView;
 use boolinator::Boolinator;
 use clap::Arg;
+use futures::future::Fuse;
+use futures::future::FutureExt;
+use futures::future::RemoteHandle;
+use futures::select;
 use futures::task::SpawnExt;
 use piston_window::*;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
@@ -38,10 +42,6 @@ use std::ops::Bound::*;
 use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
-use futures::select;
-use futures::future::RemoteHandle;
-use futures::future::FutureExt;
-use futures::future::Fuse;
 
 #[macro_use]
 extern crate lazy_static;
@@ -347,9 +347,9 @@ fn tile_counts_test() {
     assert_eq!(tile_spec_for_image_size(256, 257, 257), (256, 2, 2));
 }
 
-type ThumbRet = R<(Metadata, BTreeMap<u64, Vec<u8>>)>;
+type ThumbRet = R<Metadata>;
 
-fn make_thumb(file: Arc<File>, uid: u64) -> ThumbRet {
+fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRet {
     let _s = ScopedDuration::new("make_thumb");
 
     let mut image = ::image::open(&file.path).map_err(E::ImageError)?;
@@ -438,7 +438,14 @@ fn make_thumb(file: Arc<File>, uid: u64) -> ThumbRet {
 
     metadata.shrink_to_fit();
 
-    Ok((metadata, tiles))
+    // Do before metadata write to prevent invalid metadata references.
+    for (id, tile) in tiles {
+        db.set(id, &tile).expect("db set");
+    }
+
+    db.set_metadata(&*file, &metadata).expect("set metadata");
+
+    Ok(metadata)
 }
 
 static UPS: u64 = 100;
@@ -462,7 +469,7 @@ impl Image {
     fn from(filepath: Arc<File>, metadata: Option<Metadata>) -> Self {
         Image {
             filepath,
-            metadata: metadata.map(|e| Ok(e)),
+            metadata: metadata.map(Ok),
             ..Default::default()
         }
     }
@@ -470,8 +477,8 @@ impl Image {
 
 type Handle<T> = Fuse<RemoteHandle<T>>;
 
-struct App<'a> {
-    db: &'a database::Database,
+struct App {
+    db: Arc<database::Database>,
 
     images: Vec<Image>,
 
@@ -505,10 +512,10 @@ struct App<'a> {
     base_id: u64,
 }
 
-impl<'a> App<'a> {
+impl App {
     fn new(
         images: Vec<Image>,
-        db: &'a database::Database,
+        db: Arc<database::Database>,
         thumbnailer_threads: usize,
         base_id: u64,
     ) -> Self {
@@ -543,7 +550,11 @@ impl<'a> App<'a> {
             ],
 
             thumb_handles: BTreeMap::new(),
-            thumb_executor: futures::executor::ThreadPool::builder().pool_size(thumbnailer_threads).name_prefix("thumbnailer").create().unwrap(),
+            thumb_executor: futures::executor::ThreadPool::builder()
+                .pool_size(thumbnailer_threads)
+                .name_prefix("thumbnailer")
+                .create()
+                .unwrap(),
             thumb_threads: thumbnailer_threads,
 
             thumb_todo: [
@@ -675,34 +686,20 @@ impl<'a> App<'a> {
         let mut handles = BTreeMap::new();
         std::mem::swap(&mut handles, &mut self.thumb_handles);
 
-        for (i, mut handle) in &mut handles {
-            let i = *i;
-
-            select!{
+        for (&i, mut handle) in &mut handles {
+            select! {
                 thumb_res = handle => {
-                    let _s = ScopedDuration::new("recv_thumb");
-
-                    match thumb_res {
-                        Ok((metadata, tiles)) => {
-                            // Do before metadata write to prevent invalid metadata references.
-                            for (id, tile) in tiles {
-                                self.db.set(id, &tile).expect("db set");
-                            }
-
-                            self.db
-                                .set_metadata(&*self.images[i].filepath, &metadata)
-                                .expect("set metadata");
-
-                            self.images[i].metadata = Some(Ok(metadata));
-
-                            // Load the tiles.
+                    self.images[i].metadata = match thumb_res {
+                        Ok(metadata) => {
+                            // re-trigger cache lookup
                             self.enqueue(i);
+                            Some(Ok(metadata))
                         }
-
                         Err(e) => {
-                            self.images[i].metadata = Some(Err(e));
+                            error!("make_thumb: {}", e);
+                            Some(Err(e))
                         }
-                    }
+                    };
 
                     done.push(i);
                 }
@@ -739,10 +736,9 @@ impl<'a> App<'a> {
 
                 let tile_id_index = self.base_id + i as u64;
                 let file = Arc::clone(&image.filepath);
+                let db = Arc::clone(&self.db);
 
-                let fut = async move {
-                    make_thumb(file, tile_id_index)
-                };
+                let fut = async move { make_thumb(db, file, tile_id_index) };
 
                 let handle = self.thumb_executor.spawn_with_handle(fut).unwrap().fuse();
 
@@ -1261,13 +1257,8 @@ fn main() {
 
     {
         let _s = ScopedDuration::new("uptime");
-        App::new(images, &db, thumbnailer_threads, base_id).run();
-    }
-
-    if let Some(stats) = db.get_statistics() {
-        info!("rocksdb stats:\n{}", stats);
+        App::new(images, Arc::new(db), thumbnailer_threads, base_id).run();
     }
 
     stats::dump();
 }
-

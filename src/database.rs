@@ -89,7 +89,6 @@ impl Deref for Data {
 
 pub struct Database {
     db: rocksdb::DB,
-    opts: rocksdb::Options,
 }
 
 impl Database {
@@ -110,11 +109,7 @@ impl Database {
 
         let db = rocksdb::DB::open(&opts, path)?;
 
-        Ok(Self { db, opts })
-    }
-
-    pub fn get_statistics(&self) -> Option<String> {
-        self.opts.get_statistics()
+        Ok(Self { db })
     }
 
     pub fn get_metadata(&self, file: &crate::File) -> R<Option<crate::Metadata>> {
