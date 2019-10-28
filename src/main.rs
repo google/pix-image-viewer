@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(async_await)]
-#![feature(fnbox)]
-#![feature(await_macro)]
 #![feature(arbitrary_self_types)]
 #![recursion_limit = "1000"]
 #![feature(vec_remove_item)]
@@ -500,7 +497,6 @@ impl<'a> App<'a> {
 
         let window_settings = WindowSettings::new("pix", view.dims())
             .exit_on_esc(true)
-            .opengl(OpenGL::V3_2)
             .fullscreen(false);
 
         let mut window: PistonWindow = window_settings.build().expect("window build");
@@ -618,9 +614,11 @@ impl<'a> App<'a> {
 
                             let image = ::image::load_from_memory(&data).expect("load image");
 
+                            let mut texture_context = self.window.create_texture_context();
+
                             // TODO: Would be great to move off thread.
                             let image = Texture::from_image(
-                                &mut self.window.factory,
+                                &mut texture_context,
                                 &image.to_rgba(),
                                 &TextureSettings::new(),
                             )
@@ -909,8 +907,7 @@ impl<'a> App<'a> {
         let image = image::Image::new();
 
         let args = e.render_args().expect("render args");
-        let draw_state =
-            DrawState::default().scissor([0, 0, args.draw_width as u32, args.draw_height as u32]);
+        let draw_state = DrawState::default().scissor([0, 0, args.draw_size[0], args.draw_size[1]]);
 
         let missing_color = color::hex("888888");
         let op_color = color::hex("444444");
@@ -988,24 +985,24 @@ impl<'a> App<'a> {
                     self.update(args);
                 });
 
-                e.resize(|w, h| {
+                e.resize(|args| {
                     let _s = ScopedDuration::new("resize");
-                    self.resize(w, h)
+                    self.resize(args.draw_size[0] as f64, args.draw_size[1] as f64)
                 });
 
-                e.mouse_scroll(|h, v| {
+                e.mouse_scroll(|hv| {
                     let _s = ScopedDuration::new("mouse_scroll");
-                    self.mouse_scroll(h, v);
+                    self.mouse_scroll(hv[0], hv[1]);
                 });
 
-                e.mouse_cursor(|x, y| {
+                e.mouse_cursor(|xy| {
                     let _s = ScopedDuration::new("mouse_cursor");
-                    self.mouse_cursor(x, y);
+                    self.mouse_cursor(xy[0], xy[1]);
                 });
 
-                e.mouse_relative(|dx, dy| {
+                e.mouse_relative(|dxdy| {
                     let _s = ScopedDuration::new("mouse_relative");
-                    self.mouse_relative(dx, dy);
+                    self.mouse_relative(dxdy[0], dxdy[1]);
                 });
 
                 e.button(|b| {
@@ -1018,7 +1015,7 @@ impl<'a> App<'a> {
                 let t = &self.tiles;
                 let thumb_runner = &self.thumb_runner;
                 let metadata = &self.metadata;
-                self.window.draw_2d(&e, |c, g| {
+                self.window.draw_2d(&e, |c, g, _device| {
                     let _s = ScopedDuration::new("draw_2d");
                     Self::draw_2d(thumb_runner, &e, c, g, v, t, metadata);
                 });

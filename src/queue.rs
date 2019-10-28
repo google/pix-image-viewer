@@ -14,11 +14,10 @@
 
 use crate::stats;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
-use std::boxed::FnBox;
 use std::collections::HashSet;
 use std::time::Instant;
 
-type WorkFn<T> = Box<FnBox() -> T + Send + 'static>;
+type WorkFn<T> = Box<dyn FnOnce() -> T + Send + 'static>;
 
 type Sammich<T> = Option<(usize, T, Instant)>;
 
