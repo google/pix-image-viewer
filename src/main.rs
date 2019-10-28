@@ -249,6 +249,45 @@ impl<'a> Thumb<'a> {
     fn size(&self) -> u32 {
         self.max_dimension().next_power_of_two()
     }
+
+    fn draw(
+        &self,
+        trans: [[f64; 3]; 2],
+        zoom: f64,
+        tiles: &BTreeMap<u64, G2dTexture>,
+        draw_state: &DrawState,
+        g: &mut G2d,
+    ) {
+        let img = image::Image::new();
+
+        let max_dimension = self.max_dimension();
+
+        let zoom = zoom / (max_dimension as f64);
+
+        let (xo, yo) = (
+            (max_dimension - self.w) as f64 / 2.0 * zoom,
+            (max_dimension - self.h) as f64 / 2.0 * zoom,
+        );
+        assert!(xo == 0.0 || yo == 0.0);
+
+        let mut it = self.tiles.iter();
+
+        for ty in 0..(self.hc as u32) {
+            let ty = (ty * self.tile_size) as f64 * zoom;
+
+            for tx in 0..(self.wc as u32) {
+                let tx = (tx * self.tile_size) as f64 * zoom;
+
+                let tile = it.next().unwrap();
+
+                if let Some(texture) = tiles.get(tile) {
+                    let trans = trans.trans(xo + tx, yo + ty).zoom(zoom);
+
+                    img.draw(texture, &draw_state, trans, g);
+                }
+            }
+        }
+    }
 }
 
 impl Metadata {
@@ -488,36 +527,8 @@ impl Image {
             return false;
         };
 
-        let img = image::Image::new();
-
         for t in metadata.thumbs() {
-            let max_dimension = t.max_dimension();
-
-            let zoom = zoom / (max_dimension as f64);
-
-            let (xo, yo) = (
-                (max_dimension - t.w) as f64 / 2.0 * zoom,
-                (max_dimension - t.h) as f64 / 2.0 * zoom,
-            );
-            assert!(xo == 0.0 || yo == 0.0);
-
-            let mut it = t.tiles.iter();
-
-            for ty in 0..(t.hc as u32) {
-                let ty = (ty * t.tile_size) as f64 * zoom;
-
-                for tx in 0..(t.wc as u32) {
-                    let tx = (tx * t.tile_size) as f64 * zoom;
-
-                    let tile = it.next().unwrap();
-
-                    if let Some(texture) = tiles.get(tile) {
-                        let trans = trans.trans(xo + tx, yo + ty).zoom(zoom);
-
-                        img.draw(texture, &draw_state, trans, g);
-                    }
-                }
-            }
+            t.draw(trans, zoom, tiles, draw_state, g);
         }
 
         true
