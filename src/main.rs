@@ -473,6 +473,55 @@ impl Image {
             ..Default::default()
         }
     }
+
+    fn draw(
+        &self,
+        trans: [[f64; 3]; 2],
+        zoom: f64,
+        tiles: &BTreeMap<u64, G2dTexture>,
+        draw_state: &DrawState,
+        g: &mut G2d,
+    ) -> bool {
+        let metadata = if let Some(Ok(metadata)) = &self.metadata {
+            metadata
+        } else {
+            return false;
+        };
+
+        let img = image::Image::new();
+
+        for t in metadata.thumbs() {
+            let max_dimension = t.max_dimension();
+
+            let zoom = zoom / (max_dimension as f64);
+
+            let (xo, yo) = (
+                (max_dimension - t.w) as f64 / 2.0 * zoom,
+                (max_dimension - t.h) as f64 / 2.0 * zoom,
+            );
+            assert!(xo == 0.0 || yo == 0.0);
+
+            let mut it = t.tiles.iter();
+
+            for ty in 0..(t.hc as u32) {
+                let ty = (ty * t.tile_size) as f64 * zoom;
+
+                for tx in 0..(t.wc as u32) {
+                    let tx = (tx * t.tile_size) as f64 * zoom;
+
+                    let tile = it.next().unwrap();
+
+                    if let Some(texture) = tiles.get(tile) {
+                        let trans = trans.trans(xo + tx, yo + ty).zoom(zoom);
+
+                        img.draw(texture, &draw_state, trans, g);
+                    }
+                }
+            }
+        }
+
+        true
+    }
 }
 
 type Handle<T> = Fuse<RemoteHandle<T>>;
@@ -954,13 +1003,14 @@ impl App {
 
         let c = c.trans(view.x, view.y);
 
-        let img = image::Image::new();
-
         let args = e.render_args().expect("render args");
         let draw_state = DrawState::default().scissor([0, 0, args.draw_size[0], args.draw_size[1]]);
 
+        let black = color::hex("000000");
         let missing_color = color::hex("888888");
-        let op_color = color::hex("444444");
+        let op_color = color::hex("222222");
+
+        let zoom = (view.zoom * view.zoom) / (view.zoom + 1.0);
 
         for (i, image) in images.iter().enumerate() {
             let (x, y, is_visible) = view.coords(i);
@@ -968,52 +1018,16 @@ impl App {
                 continue;
             }
 
-            let zoom = view.zoom * (view.zoom / (view.zoom + 1.0));
+            let trans = c.transform.trans(x, y);
 
-            let loading = thumb_handles.contains_key(&i);
+            if image.draw(trans, zoom, tiles, &draw_state, g) {
+                continue;
+            }
 
-            if let Some(Ok(metadata)) = &image.metadata {
-                let thumbs = metadata.thumbs();
-
-                for t in thumbs {
-                    let max_dimension = t.max_dimension();
-
-                    let scale = zoom / (max_dimension as f64);
-
-                    let (xo, yo) = (
-                        (max_dimension - t.w) as f64 / 2.0 * scale,
-                        (max_dimension - t.h) as f64 / 2.0 * scale,
-                    );
-                    assert!(xo == 0.0 || yo == 0.0);
-
-                    let mut it = t.tiles.iter();
-
-                    for ty in 0..(t.hc as u32) {
-                        let ty = (ty * t.tile_size) as f64 * scale;
-
-                        for tx in 0..(t.wc as u32) {
-                            let tx = (tx * t.tile_size) as f64 * scale;
-
-                            let tile = it.next().unwrap();
-
-                            if let Some(texture) = tiles.get(tile) {
-                                let trans = c
-                                    .transform
-                                    .trans(x + xo + tx, y + yo + ty)
-                                    .scale(scale, scale);
-                                img.draw(texture, &draw_state, trans, g);
-                            }
-                        }
-                    }
-                }
-            } else if loading {
-                let trans = c.transform.trans(x, y);
-                rectangle(op_color, [0.0, 0.0, 1.0, zoom], trans, g);
-                rectangle(op_color, [0.0, 0.0, zoom, 1.0], trans, g);
-                rectangle(op_color, [zoom - 1.0, 0.0, 1.0, zoom], trans, g);
-                rectangle(op_color, [0.0, zoom - 1.0, zoom, 1.0], trans, g);
+            if thumb_handles.contains_key(&i) {
+                rectangle(op_color, [0.0, 0.0, zoom, zoom], trans, g);
+                rectangle(black, [1.0, 1.0, zoom - 2.0, zoom - 2.0], trans, g);
             } else {
-                let trans = c.transform.trans(x, y);
                 rectangle(missing_color, [zoom / 2.0, zoom / 2.0, 1.0, 1.0], trans, g);
             }
         }
