@@ -263,26 +263,26 @@ impl<'a> Thumb<'a> {
         let max_dimension = self.max_dimension();
 
         let zoom = zoom / (max_dimension as f64);
+        let trans = trans.zoom(zoom);
 
         let (xo, yo) = (
-            (max_dimension - self.w) as f64 / 2.0 * zoom,
-            (max_dimension - self.h) as f64 / 2.0 * zoom,
+            (max_dimension - self.w) as f64 / 2.0,
+            (max_dimension - self.h) as f64 / 2.0,
         );
         assert!(xo == 0.0 || yo == 0.0);
 
         let mut it = self.tiles.iter();
 
         for ty in 0..(self.hc as u32) {
-            let ty = (ty * self.tile_size) as f64 * zoom;
+            let ty = yo + (ty * self.tile_size) as f64;
 
             for tx in 0..(self.wc as u32) {
-                let tx = (tx * self.tile_size) as f64 * zoom;
+                let tx = xo + (tx * self.tile_size) as f64;
 
                 let tile = it.next().unwrap();
 
                 if let Some(texture) = tiles.get(tile) {
-                    let trans = trans.trans(xo + tx, yo + ty).zoom(zoom);
-
+                    let trans = trans.trans(tx, ty);
                     img.draw(texture, &draw_state, trans, g);
                 }
             }
