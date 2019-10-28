@@ -18,7 +18,7 @@ use crate::File;
 use bincode::{deserialize, serialize};
 use std::ops::Deref;
 
-static MAX_ID: &'static [u8] = b"_MAX_ID";
+static MAX_ID: &[u8] = b"_MAX_ID";
 static METADATA_PREFIX: char = 'M';
 static TILE_PREFIX: char = 'T';
 
