@@ -31,18 +31,22 @@ use ::image::GenericImage;
 use ::image::GenericImageView;
 use boolinator::Boolinator;
 use clap::Arg;
+use futures::task::SpawnExt;
 use piston_window::*;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ops::Bound::*;
 use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
+use futures::select;
+use futures::future::RemoteHandle;
+use futures::future::FutureExt;
+use futures::future::Fuse;
 
 #[macro_use]
 extern crate lazy_static;
 
 mod database;
-mod queue;
 mod stats;
 
 #[derive(Debug, Fail)]
@@ -343,7 +347,9 @@ fn tile_counts_test() {
     assert_eq!(tile_spec_for_image_size(256, 257, 257), (256, 2, 2));
 }
 
-fn make_thumb(file: Arc<File>, uid: u64) -> R<(Metadata, BTreeMap<u64, Vec<u8>>)> {
+type ThumbRet = R<(Metadata, BTreeMap<u64, Vec<u8>>)>;
+
+fn make_thumb(file: Arc<File>, uid: u64) -> ThumbRet {
     let _s = ScopedDuration::new("make_thumb");
 
     let mut image = ::image::open(&file.path).map_err(E::ImageError)?;
@@ -462,6 +468,8 @@ impl Image {
     }
 }
 
+type Handle<T> = Fuse<RemoteHandle<T>>;
+
 struct App<'a> {
     db: &'a database::Database,
 
@@ -486,7 +494,9 @@ struct App<'a> {
     cache_todo: [VecDeque<usize>; 2],
 
     thumb_todo: [VecDeque<usize>; 2],
-    thumb_runner: queue::Queue<R<(Metadata, BTreeMap<u64, Vec<u8>>)>>,
+    thumb_handles: BTreeMap<usize, Handle<ThumbRet>>,
+    thumb_executor: futures::executor::ThreadPool,
+    thumb_threads: usize,
 
     shift_held: bool,
 
@@ -499,7 +509,7 @@ impl<'a> App<'a> {
     fn new(
         images: Vec<Image>,
         db: &'a database::Database,
-        thumbnailer_threads: u32,
+        thumbnailer_threads: usize,
         base_id: u64,
     ) -> Self {
         let view = View::new(images.len());
@@ -532,12 +542,14 @@ impl<'a> App<'a> {
                 VecDeque::with_capacity(images.len()),
             ],
 
+            thumb_handles: BTreeMap::new(),
+            thumb_executor: futures::executor::ThreadPool::builder().pool_size(thumbnailer_threads).name_prefix("thumbnailer").create().unwrap(),
+            thumb_threads: thumbnailer_threads,
+
             thumb_todo: [
                 VecDeque::with_capacity(images.len()),
                 VecDeque::with_capacity(images.len()),
             ],
-
-            thumb_runner: queue::Queue::new(thumbnailer_threads),
 
             shift_held: false,
 
@@ -586,7 +598,7 @@ impl<'a> App<'a> {
 
                 let metadata = match &self.images[i].metadata {
                     Some(Ok(metadata)) => metadata,
-                    Some(Err(_)) => continue,
+                    Some(_) => continue,
                     None => {
                         // No metadata found, thus no thumbnails to load. Move it into the thumb
                         // queue to be thumbnailed.
@@ -657,55 +669,84 @@ impl<'a> App<'a> {
         self.cache_todo[p].push_front(i);
     }
 
-    fn enqueue_thumb_op(&mut self) {
-        if self.thumb_runner.is_full() {
-            return;
+    fn recv_thumbs(&mut self) {
+        let mut done: Vec<usize> = Vec::new();
+
+        let mut handles = BTreeMap::new();
+        std::mem::swap(&mut handles, &mut self.thumb_handles);
+
+        for (i, mut handle) in &mut handles {
+            let i = *i;
+
+            select!{
+                thumb_res = handle => {
+                    let _s = ScopedDuration::new("recv_thumb");
+
+                    match thumb_res {
+                        Ok((metadata, tiles)) => {
+                            // Do before metadata write to prevent invalid metadata references.
+                            for (id, tile) in tiles {
+                                self.db.set(id, &tile).expect("db set");
+                            }
+
+                            self.db
+                                .set_metadata(&*self.images[i].filepath, &metadata)
+                                .expect("set metadata");
+
+                            self.images[i].metadata = Some(Ok(metadata));
+
+                            // Load the tiles.
+                            self.enqueue(i);
+                        }
+
+                        Err(e) => {
+                            self.images[i].metadata = Some(Err(e));
+                        }
+                    }
+
+                    done.push(i);
+                }
+
+                default => {}
+            }
         }
 
-        let _s = ScopedDuration::new("enqueue_thumb_op");
+        for i in &done {
+            handles.remove(i);
+        }
 
+        std::mem::swap(&mut handles, &mut self.thumb_handles);
+    }
+
+    fn make_thumbs(&mut self) {
         for p in 0..self.thumb_todo.len() {
             for _ in 0..self.thumb_todo[p].len() {
+                if self.thumb_handles.len() > self.thumb_threads {
+                    return;
+                }
+
                 let i = self.thumb_todo[p].pop_front().unwrap();
 
                 // Already fetching.
-                if self.thumb_runner.inflight(i) {
+                if self.thumb_handles.contains_key(&i) {
+                    continue;
+                }
+
+                let image = &self.images[i];
+                if image.metadata.is_some() {
                     continue;
                 }
 
                 let tile_id_index = self.base_id + i as u64;
+                let file = Arc::clone(&image.filepath);
 
-                let file = Arc::clone(&self.images[i].filepath);
-                let work_fn = Box::new(move || make_thumb(file, tile_id_index));
-                self.thumb_runner.send(i, work_fn);
-                return;
-            }
-        }
-    }
+                let fut = async move {
+                    make_thumb(file, tile_id_index)
+                };
 
-    fn recv_thumb(&mut self) {
-        if let Some((i, res)) = self.thumb_runner.recv() {
-            let _s = ScopedDuration::new("recv_thumb");
-            match res {
-                Ok((metadata, tiles)) => {
-                    // Do before metadata write to prevent invalid metadata references.
-                    for (id, tile) in tiles {
-                        self.db.set(id, &tile).expect("db set");
-                    }
+                let handle = self.thumb_executor.spawn_with_handle(fut).unwrap().fuse();
 
-                    self.db
-                        .set_metadata(&*self.images[i].filepath, &metadata)
-                        .expect("set metadata");
-
-                    self.images[i].metadata = Some(Ok(metadata));
-
-                    // Load the tiles.
-                    self.enqueue(i);
-                }
-
-                Err(e) => {
-                    self.images[i].metadata = Some(Err(e));
-                }
+                self.thumb_handles.insert(i, handle);
             }
         }
     }
@@ -727,8 +768,8 @@ impl<'a> App<'a> {
             return;
         }
 
-        self.enqueue_thumb_op();
-        self.recv_thumb();
+        self.recv_thumbs();
+        self.make_thumbs();
     }
 
     fn resize(&mut self, w: f64, h: f64) {
@@ -905,7 +946,7 @@ impl<'a> App<'a> {
     }
 
     fn draw_2d(
-        thumb_runner: &queue::Queue<R<(Metadata, BTreeMap<u64, Vec<u8>>)>>,
+        thumb_handles: &BTreeMap<usize, Handle<ThumbRet>>,
         e: &Event,
         c: Context,
         g: &mut G2d,
@@ -917,7 +958,7 @@ impl<'a> App<'a> {
 
         let c = c.trans(view.x, view.y);
 
-        let image = image::Image::new();
+        let img = image::Image::new();
 
         let args = e.render_args().expect("render args");
         let draw_state = DrawState::default().scissor([0, 0, args.draw_size[0], args.draw_size[1]]);
@@ -925,7 +966,7 @@ impl<'a> App<'a> {
         let missing_color = color::hex("888888");
         let op_color = color::hex("444444");
 
-        for i in 0..view.num_tiles {
+        for (i, image) in images.iter().enumerate() {
             let (x, y, is_visible) = view.coords(i);
             if !is_visible {
                 continue;
@@ -933,9 +974,9 @@ impl<'a> App<'a> {
 
             let zoom = view.zoom * (view.zoom / (view.zoom + 1.0));
 
-            let loading = thumb_runner.inflight(i);
+            let loading = thumb_handles.contains_key(&i);
 
-            if let Some(Ok(metadata)) = &images[i].metadata {
+            if let Some(Ok(metadata)) = &image.metadata {
                 let thumbs = metadata.thumbs();
 
                 for t in thumbs {
@@ -964,7 +1005,7 @@ impl<'a> App<'a> {
                                     .transform
                                     .trans(x + xo + tx, y + yo + ty)
                                     .scale(scale, scale);
-                                image.draw(texture, &draw_state, trans, g);
+                                img.draw(texture, &draw_state, trans, g);
                             }
                         }
                     }
@@ -1024,11 +1065,11 @@ impl<'a> App<'a> {
                 // borrowck
                 let v = &self.view;
                 let t = &self.tiles;
-                let thumb_runner = &self.thumb_runner;
                 let images = &self.images;
+                let thumb_handles = &self.thumb_handles;
                 self.window.draw_2d(&e, |c, g, _device| {
                     let _s = ScopedDuration::new("draw_2d");
-                    Self::draw_2d(thumb_runner, &e, c, g, v, t, images);
+                    Self::draw_2d(thumb_handles, &e, c, g, v, t, images);
                 });
             } else {
                 break;
@@ -1174,10 +1215,10 @@ fn main() {
         .unwrap_or_else(|| vec![String::from(".")]);
     info!("Paths: {:?}", paths);
 
-    let thumbnailer_threads: u32 = if let Some(threads) = matches.value_of("threads") {
+    let thumbnailer_threads: usize = if let Some(threads) = matches.value_of("threads") {
         threads.parse().expect("not an int")
     } else {
-        num_cpus::get() as u32
+        num_cpus::get()
     };
     info!("Thumbnailer threads {}", thumbnailer_threads);
 
@@ -1229,3 +1270,4 @@ fn main() {
 
     stats::dump();
 }
+
