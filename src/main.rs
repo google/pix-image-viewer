@@ -270,9 +270,12 @@ fn tile_ref_test() {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TileSpec {
-    tile_size: u32,
-    wc: u8,
-    hc: u8,
+    // Grid width and height (in number of tiles).
+    grid_size: [u8; 2],
+
+    // Tile pixel size (width and height) in pow2.
+    tile_size: u8,
+
     tile_refs: Vec<TileRef>,
 }
 
@@ -320,7 +323,7 @@ impl Draw for Thumb {
         let zoom = zoom / (max_dimension as f64);
         let trans = trans.zoom(zoom);
 
-        let (xo, yo) = (
+        let (x_offset, y_offset) = (
             (max_dimension - self.w) as f64 / 2.0,
             (max_dimension - self.h) as f64 / 2.0,
         );
@@ -328,22 +331,20 @@ impl Draw for Thumb {
         match &self.tile_refs {
             TileRefs::One(tile_ref) => {
                 if let Some(texture) = tiles.get(&tile_ref) {
-                    let trans = trans.trans(xo, yo);
+                    let trans = trans.trans(x_offset, y_offset);
                     img.draw(texture, &draw_state, trans, g);
                 }
             }
             TileRefs::Many(tile_spec) => {
+                let [gw, gh] = tile_spec.grid_size;
+                let tile_size = u8u32(tile_spec.tile_size);
                 let mut it = tile_spec.tile_refs.iter();
-                for ty in 0..(tile_spec.hc as u32) {
-                    let ty = yo + (ty * tile_spec.tile_size) as f64;
 
-                    for tx in 0..(tile_spec.wc as u32) {
-                        let tx = xo + (tx * tile_spec.tile_size) as f64;
-
+                for y in (0..(gh as u32)).map(|h| y_offset + (h * tile_size) as f64) {
+                    for x in (0..(gw as u32)).map(|w| x_offset + (w * tile_size) as f64) {
                         let tile_ref = it.next().unwrap();
-
                         if let Some(texture) = tiles.get(tile_ref) {
-                            let trans = trans.trans(tx, ty);
+                            let trans = trans.trans(x, y);
                             img.draw(texture, &draw_state, trans, g);
                         }
                     }
@@ -480,9 +481,8 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
             TileRefs::One(tile_refs[0])
         } else {
             TileRefs::Many(Box::new(TileSpec {
-                tile_size,
-                wc,
-                hc,
+                grid_size: [wc, hc],
+                tile_size: u32u8(tile_size),
                 tile_refs,
             }))
         };
