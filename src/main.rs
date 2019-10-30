@@ -218,30 +218,23 @@ fn size_conversions() {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Metadata {
-    // Can be larger for large images if the tile coordinates don't fit within a u8.
-    //
-    // See tile_spec_for_image_size.
-    target_tile_size: u8,
-
-    sizes: Vec<(u32, u32)>,
-
-    tiles: Vec<u64>,
-    // TODO: hints for garbage collection
+    thumbs: Vec<Thumb>,
 }
 
-#[derive(Debug)]
-struct Thumb<'a> {
+#[derive(Debug, Serialize, Deserialize)]
+struct Thumb {
     // image metadata
     w: u32,
     h: u32,
+
     // tile metadata
+    tile_size: u32,
     wc: u8,
     hc: u8,
-    tile_size: u32,
-    tiles: &'a [u64],
+    tiles: Vec<u64>,
 }
 
-impl<'a> Thumb<'a> {
+impl Thumb {
     fn max_dimension(&self) -> u32 {
         std::cmp::max(self.w, self.h)
     }
@@ -251,7 +244,7 @@ impl<'a> Thumb<'a> {
     }
 }
 
-impl<'a> Draw for Thumb<'a> {
+impl Draw for Thumb {
     fn draw(
         &self,
         trans: [[f64; 3]; 2],
@@ -294,58 +287,11 @@ impl<'a> Draw for Thumb<'a> {
     }
 }
 
-impl Metadata {
-    fn shrink_to_fit(&mut self) {
-        self.sizes.shrink_to_fit();
-        self.tiles.shrink_to_fit();
-    }
-
-    fn thumbs(&self) -> Vec<Thumb> {
-        let mut ret = Vec::new();
-
-        let mut start = 0;
-
-        let target_tile_size = u8u32(self.target_tile_size);
-
-        for &(w, h) in self.sizes.iter() {
-            let (tile_size, wc, hc) = tile_spec_for_image_size(target_tile_size, w, h);
-
-            let num_tiles = wc as usize * hc as usize;
-
-            let end = start + num_tiles;
-
-            let tiles = &self.tiles[start..end];
-
-            // Sanity checking.
-            {
-                let mut sizes: Vec<u8> =
-                    tiles.iter().map(|&id| deconstruct_tile_id(id).0).collect();
-                sizes.dedup();
-                assert_eq!(sizes.len(), 1);
-                assert_eq!(tiles.len(), num_tiles);
-            }
-
-            ret.push(Thumb {
-                w,
-                h,
-                tile_size,
-                wc,
-                hc,
-                tiles,
-            });
-
-            start = end;
-        }
-
-        ret
-    }
-}
-
 trait Nearest<T> {
     fn nearest(&self, target_size: u32) -> usize;
 }
 
-impl<'a> Nearest<Thumb<'a>> for Vec<Thumb<'a>> {
+impl Nearest<Thumb> for Vec<Thumb> {
     fn nearest(&self, target_size: u32) -> usize {
         let mut found = None;
 
@@ -407,7 +353,7 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
     let mut bucket = orig_bucket;
 
-    let mut metadata_tmp: Vec<((u32, u32), Vec<u64>)> = Vec::new();
+    let mut thumbs: Vec<Thumb> = Vec::new();
 
     let mut tiles: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
 
@@ -422,13 +368,20 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
             image = image.thumbnail(bucket, bucket);
         }
 
+        let lossy = bucket != orig_bucket;
+
         let (w, h) = image.dimensions();
 
         let (tile_size, wc, hc) = tile_spec_for_image_size(target_tile_size, w, h);
 
-        let lossy = bucket != orig_bucket;
-
-        let mut ids = Vec::new();
+        let mut thumb = Thumb {
+            w,
+            h,
+            tile_size,
+            wc,
+            hc,
+            tiles: Vec::new(),
+        };
 
         let mut chunk_id = 0u16;
 
@@ -458,28 +411,19 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
                 tiles.insert(tile_id, buf);
 
-                ids.push(tile_id);
+                thumb.tiles.push(tile_id);
             }
         }
 
-        metadata_tmp.push(((w, h), ids));
+        thumbs.push(thumb);
 
         // Next size down.
         bucket >>= 1;
     }
 
-    let mut metadata = Metadata {
-        target_tile_size: u32u8(target_tile_size),
-        sizes: Vec::new(),
-        tiles: Vec::new(),
-    };
+    thumbs.reverse();
 
-    for (dims, ids) in metadata_tmp.into_iter().rev() {
-        metadata.sizes.push(dims);
-        metadata.tiles.extend_from_slice(&ids);
-    }
-
-    metadata.shrink_to_fit();
+    let metadata = Metadata { thumbs };
 
     // Do before metadata write to prevent invalid metadata references.
     for (id, tile) in tiles {
@@ -544,8 +488,9 @@ impl Draw for Image {
             return false;
         };
 
-        for t in metadata.thumbs() {
-            t.draw(trans, zoom, tiles, draw_state, g);
+        for thumb in &metadata.thumbs {
+            // TODO: only draw the active thumb.
+            thumb.draw(trans, zoom, tiles, draw_state, g);
         }
 
         true
@@ -701,18 +646,19 @@ impl App {
                     }
                 };
 
-                let mut thumbs = metadata.thumbs();
+                let thumbs = &metadata.thumbs;
 
                 // If visible
-                if p == 0 {
-                    let n = thumbs.nearest(target_size);
-                    thumbs.swap(0, n);
-                }
+                let n = if p == 0 {
+                    thumbs.nearest(target_size)
+                } else {
+                    0
+                };
 
                 for (j, thumb) in thumbs.iter().enumerate() {
-                    for &tile in thumb.tiles {
+                    for &tile in &thumb.tiles {
                         // visible & target chunks
-                        if p == 0 && j == 0 {
+                        if j == n {
                             // Already loaded.
                             if self.tiles.contains_key(&tile) {
                                 continue;

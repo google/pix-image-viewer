@@ -122,8 +122,7 @@ impl Database {
                 std::time::Duration::from_micros(v.len() as u64),
             );
 
-            let mut metadata: crate::Metadata = deserialize(&*v).map_err(E::DecodeError)?;
-            metadata.shrink_to_fit();
+            let metadata: crate::Metadata = deserialize(&*v).map_err(E::DecodeError)?;
 
             Ok(Some(metadata))
         } else {
@@ -135,6 +134,8 @@ impl Database {
         let _s = ScopedDuration::new("get_metadata");
 
         let k = Key::for_file(file);
+
+        //println!("{:?}", metadata);
 
         let encoded: Vec<u8> = serialize(metadata).map_err(E::EncodeError)?;
 
