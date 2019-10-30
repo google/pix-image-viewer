@@ -217,7 +217,7 @@ fn size_conversions() {
     assert_eq!(u8u32(7), 128);
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Default)]
 pub struct TileRef(u64);
 
 impl TileRef {
@@ -225,6 +225,7 @@ impl TileRef {
         Self((chunk as u64) | ((index % (1u64 << 40)) << 16) | ((size as u64) << 56))
     }
 
+    #[cfg(test)]
     fn deconstruct(&self) -> (u8, u64, u16) {
         let size = ((self.0 & 0xFF00_0000_0000_0000u64) >> 56) as u8;
         let index = (self.0 & 0x00FF_FFFF_FFFF_0000u64) >> 16;
@@ -268,24 +269,24 @@ fn tile_ref_test() {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Tiles {
+struct TileSpec {
     tile_size: u32,
     wc: u8,
     hc: u8,
-    refs: Vec<TileRef>,
+    tile_refs: Vec<TileRef>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-enum Refs {
+enum TileRefs {
     One(TileRef),
-    Many(Box<Tiles>),
+    Many(Box<TileSpec>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Thumb {
     w: u32,
     h: u32,
-    refs: Refs,
+    tile_refs: TileRefs,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -324,24 +325,24 @@ impl Draw for Thumb {
             (max_dimension - self.h) as f64 / 2.0,
         );
 
-        match &self.refs {
-            Refs::One(tile) => {
-                if let Some(texture) = tiles.get(&tile) {
+        match &self.tile_refs {
+            TileRefs::One(tile_ref) => {
+                if let Some(texture) = tiles.get(&tile_ref) {
                     let trans = trans.trans(xo, yo);
                     img.draw(texture, &draw_state, trans, g);
                 }
             }
-            Refs::Many(t) => {
-                let mut it = t.refs.iter();
-                for ty in 0..(t.hc as u32) {
-                    let ty = yo + (ty * t.tile_size) as f64;
+            TileRefs::Many(tile_spec) => {
+                let mut it = tile_spec.tile_refs.iter();
+                for ty in 0..(tile_spec.hc as u32) {
+                    let ty = yo + (ty * tile_spec.tile_size) as f64;
 
-                    for tx in 0..(t.wc as u32) {
-                        let tx = xo + (tx * t.tile_size) as f64;
+                    for tx in 0..(tile_spec.wc as u32) {
+                        let tx = xo + (tx * tile_spec.tile_size) as f64;
 
-                        let tile = it.next().unwrap();
+                        let tile_ref = it.next().unwrap();
 
-                        if let Some(texture) = tiles.get(tile) {
+                        if let Some(texture) = tiles.get(tile_ref) {
                             let trans = trans.trans(tx, ty);
                             img.draw(texture, &draw_state, trans, g);
                         }
@@ -443,7 +444,7 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
         let mut chunk_id = 0u16;
 
-        let mut refs: Vec<TileRef> = Vec::new();
+        let mut tile_refs: Vec<TileRef> = Vec::new();
 
         for y in 0..(hc as u32) {
             let (min_y, max_y) = (y * tile_size, std::cmp::min((y + 1) * tile_size, h));
@@ -471,23 +472,22 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
                 tiles.insert(tile_id, buf);
 
-                refs.push(tile_id);
+                tile_refs.push(tile_id);
             }
         }
 
-        let refs = if refs.len() == 1 {
-            Refs::One(*refs.first().unwrap())
+        let tile_refs = if tile_refs.len() == 1 {
+            TileRefs::One(tile_refs[0])
         } else {
-            let many = Tiles {
+            TileRefs::Many(Box::new(TileSpec {
                 tile_size,
                 wc,
                 hc,
-                refs,
-            };
-            Refs::Many(Box::new(many))
+                tile_refs,
+            }))
         };
 
-        let thumb = Thumb { w, h, refs };
+        let thumb = Thumb { w, h, tile_refs };
 
         thumbs.push(thumb);
 
@@ -741,22 +741,26 @@ impl App {
 
                 let thumb = &thumbs[n];
 
-                let tiles = match &thumb.refs {
-                    Refs::One(r) => vec![*r],
-                    Refs::Many(tiles) => tiles.refs.clone(),
+                let mut one_ref = [TileRef::default()];
+                let tile_refs: &[TileRef] = match &thumb.tile_refs {
+                    TileRefs::One(tile_ref) => {
+                        one_ref[0] = *tile_ref;
+                        &one_ref
+                    }
+                    TileRefs::Many(tile_spec) => &tile_spec.tile_refs,
                 };
 
                 // Load new tiles.
-                for &tile in &tiles {
+                for tile_ref in tile_refs {
                     // Already loaded.
-                    if self.tiles.contains_key(&tile) {
+                    if self.tiles.contains_key(tile_ref) {
                         continue;
                     }
 
                     // load the tile from the cache
                     let _s3 = ScopedDuration::new("load_tile");
 
-                    let data = self.db.get(tile).expect("db get").expect("missing tile");
+                    let data = self.db.get(*tile_ref).expect("db get").expect("missing tile");
 
                     let image = ::image::load_from_memory(&data).expect("load image");
 
@@ -768,7 +772,7 @@ impl App {
                     )
                     .expect("texture");
 
-                    self.tiles.insert(tile, image);
+                    self.tiles.insert(*tile_ref, image);
 
                     // Check if we've exhausted our time budget (we are in the main
                     // thread).
@@ -785,13 +789,13 @@ impl App {
                     if j == n {
                         continue;
                     }
-                    match &thumb.refs {
-                        Refs::One(r) => {
-                            self.tiles.remove(r);
+                    match &thumb.tile_refs {
+                        TileRefs::One(tile_ref) => {
+                            self.tiles.remove(tile_ref);
                         }
-                        Refs::Many(t) => {
-                            for tile in &t.refs {
-                                self.tiles.remove(tile);
+                        TileRefs::Many(tile_spec) => {
+                            for tile_ref in &tile_spec.tile_refs {
+                                self.tiles.remove(tile_ref);
                             }
                         }
                     };
