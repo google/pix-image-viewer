@@ -440,7 +440,6 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
         thumbs.push(thumb);
 
-        // Next size down.
         bucket >>= 1;
     }
 
@@ -483,7 +482,7 @@ trait Draw {
 struct Image {
     filepath: Arc<File>,
     metadata: Option<R<Metadata>>,
-    size: u32,
+    size: Option<usize>,
 }
 
 impl Image {
@@ -625,7 +624,7 @@ impl App {
         if let Some(new) = self.new_window_settings.take() {
             // force reload of images
             for s in &mut self.images {
-                s.size = 0;
+                s.size = None;
             }
 
             self.window_settings = new.clone();
@@ -658,7 +657,9 @@ impl App {
             for _ in 0..self.cache_todo[p].len() {
                 let i = self.cache_todo[p].pop_front().unwrap();
 
-                let metadata = match &self.images[i].metadata {
+                let image = &self.images[i];
+
+                let metadata = match &image.metadata {
                     Some(Ok(metadata)) => metadata,
                     Some(_) => continue,
                     None => {
@@ -678,51 +679,70 @@ impl App {
                     0
                 };
 
-                for (j, thumb) in thumbs.iter().enumerate() {
-                    let tiles = match &thumb.refs {
-                        Refs::One(r) => vec![*r],
-                        Refs::Many(tiles) => tiles.refs.clone(),
-                    };
+                // Already loaded target size.
+                if Some(n) == image.size {
+                    continue;
+                }
 
-                    for &tile in &tiles {
-                        // visible & target chunks
-                        if j == n {
-                            // Already loaded.
-                            if self.tiles.contains_key(&tile) {
-                                continue;
-                            }
+                let thumb = &thumbs[n];
 
-                            // load the tile from the cache
-                            let _s3 = ScopedDuration::new("load_tile");
+                let tiles = match &thumb.refs {
+                    Refs::One(r) => vec![*r],
+                    Refs::Many(tiles) => tiles.refs.clone(),
+                };
 
-                            let data = self.db.get(tile).expect("db get").expect("missing tile");
+                // Load new tiles.
+                for &tile in &tiles {
+                    // Already loaded.
+                    if self.tiles.contains_key(&tile) {
+                        continue;
+                    }
 
-                            let image = ::image::load_from_memory(&data).expect("load image");
+                    // load the tile from the cache
+                    let _s3 = ScopedDuration::new("load_tile");
 
-                            // TODO: Would be great to move off thread.
-                            let image = Texture::from_image(
-                                &mut self.texture_context,
-                                &image.to_rgba(),
-                                &texture_settings,
-                            )
-                            .expect("texture");
+                    let data = self.db.get(tile).expect("db get").expect("missing tile");
 
-                            self.tiles.insert(tile, image);
+                    let image = ::image::load_from_memory(&data).expect("load image");
 
-                            // Check if we've exhausted our time budget (we are in the main
-                            // thread).
-                            if now.elapsed().unwrap() > std::time::Duration::from_millis(10) {
-                                // There might still be work to be done, resume from here next
-                                // time.
-                                self.cache_todo[p].push_front(i);
-                                return true;
-                            }
-                        } else {
-                            // Unload
-                            self.tiles.remove(&tile);
-                        }
+                    // TODO: Would be great to move off thread.
+                    let image = Texture::from_image(
+                        &mut self.texture_context,
+                        &image.to_rgba(),
+                        &texture_settings,
+                    )
+                    .expect("texture");
+
+                    self.tiles.insert(tile, image);
+
+                    // Check if we've exhausted our time budget (we are in the main
+                    // thread).
+                    if now.elapsed().unwrap() > std::time::Duration::from_millis(10) {
+                        // There might still be work to be done, resume from here next
+                        // time.
+                        self.cache_todo[p].push_front(i);
+                        return true;
                     }
                 }
+
+                // Unload old tiles.
+                for (j, thumb) in thumbs.iter().enumerate() {
+                    if j == n {
+                        continue;
+                    }
+                    match &thumb.refs {
+                        Refs::One(r) => {
+                            self.tiles.remove(r);
+                        }
+                        Refs::Many(t) => {
+                            for tile in &t.refs {
+                                self.tiles.remove(tile);
+                            }
+                        }
+                    };
+                }
+
+                self.images[i].size = Some(n);
             }
         }
 
@@ -736,6 +756,8 @@ impl App {
     }
 
     fn recv_thumbs(&mut self) {
+        let _s = ScopedDuration::new("recv_thumbs");
+
         let mut done: Vec<usize> = Vec::new();
 
         let mut handles = BTreeMap::new();
@@ -771,6 +793,8 @@ impl App {
     }
 
     fn make_thumbs(&mut self) {
+        let _s = ScopedDuration::new("make_thumbs");
+
         for p in 0..self.thumb_todo.len() {
             for _ in 0..self.thumb_todo[p].len() {
                 if self.thumb_handles.len() > self.thumb_threads {
@@ -779,13 +803,13 @@ impl App {
 
                 let i = self.thumb_todo[p].pop_front().unwrap();
 
-                // Already fetching.
-                if self.thumb_handles.contains_key(&i) {
+                let image = &self.images[i];
+                if image.metadata.is_some() {
                     continue;
                 }
 
-                let image = &self.images[i];
-                if image.metadata.is_some() {
+                // Already fetching.
+                if self.thumb_handles.contains_key(&i) {
                     continue;
                 }
 
@@ -1091,6 +1115,8 @@ impl App {
                 break;
             }
         }
+
+        self.thumb_handles.clear();
     }
 }
 
