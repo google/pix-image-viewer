@@ -566,6 +566,7 @@ struct App {
     new_window_settings: Option<WindowSettings>,
     window_settings: WindowSettings,
     window: PistonWindow,
+    texture_context: G2dTextureContext,
 
     tiles: BTreeMap<u64, G2dTexture>,
 
@@ -605,6 +606,8 @@ impl App {
         let mut window: PistonWindow = window_settings.build().expect("window build");
         window.set_ups(UPS);
 
+        let texture_context = window.create_texture_context();
+
         Self {
             db,
 
@@ -613,6 +616,7 @@ impl App {
             new_window_settings: None,
             window_settings,
             window,
+            texture_context,
 
             tiles: BTreeMap::new(),
 
@@ -677,6 +681,8 @@ impl App {
 
         let target_size = self.target_size();
 
+        let texture_settings = TextureSettings::new();
+
         // visible first
         for p in 0..self.cache_todo.len() {
             // at most one pass through the list.
@@ -719,13 +725,11 @@ impl App {
 
                             let image = ::image::load_from_memory(&data).expect("load image");
 
-                            let mut texture_context = self.window.create_texture_context();
-
                             // TODO: Would be great to move off thread.
                             let image = Texture::from_image(
-                                &mut texture_context,
+                                &mut self.texture_context,
                                 &image.to_rgba(),
-                                &TextureSettings::new(),
+                                &texture_settings,
                             )
                             .expect("texture");
 
