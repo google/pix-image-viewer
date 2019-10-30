@@ -505,18 +505,14 @@ impl Draw for Image {
         draw_state: &DrawState,
         g: &mut G2d,
     ) -> bool {
-        let metadata = if let Some(Ok(metadata)) = &self.metadata {
-            metadata
-        } else {
-            return false;
-        };
-
-        for thumb in &metadata.thumbs {
-            // TODO: only draw the active thumb.
+        if let Some(n) = self.size {
+            let metadata = self.metadata.as_ref().unwrap().as_ref().unwrap();
+            let thumb = &metadata.thumbs[n];
             thumb.draw(trans, zoom, tiles, draw_state, g);
+            true
+        } else {
+            false
         }
-
-        true
     }
 }
 
