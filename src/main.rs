@@ -249,7 +249,9 @@ impl<'a> Thumb<'a> {
     fn size(&self) -> u32 {
         self.max_dimension().next_power_of_two()
     }
+}
 
+impl<'a> Draw for Thumb<'a> {
     fn draw(
         &self,
         trans: [[f64; 3]; 2],
@@ -257,7 +259,7 @@ impl<'a> Thumb<'a> {
         tiles: &BTreeMap<u64, G2dTexture>,
         draw_state: &DrawState,
         g: &mut G2d,
-    ) {
+    ) -> bool {
         let img = image::Image::new();
 
         let max_dimension = self.max_dimension();
@@ -287,6 +289,8 @@ impl<'a> Thumb<'a> {
                 }
             }
         }
+
+        true
     }
 }
 
@@ -497,6 +501,17 @@ static TARGET_TILE_SIZE: u32 = 128;
 
 static UPSIZE_FACTOR: f64 = 1.5;
 
+trait Draw {
+    fn draw(
+        &self,
+        trans: [[f64; 3]; 2],
+        zoom: f64,
+        tiles: &BTreeMap<u64, G2dTexture>,
+        draw_state: &DrawState,
+        g: &mut G2d,
+    ) -> bool;
+}
+
 #[derive(Default)]
 struct Image {
     filepath: Arc<File>,
@@ -512,7 +527,9 @@ impl Image {
             ..Default::default()
         }
     }
+}
 
+impl Draw for Image {
     fn draw(
         &self,
         trans: [[f64; 3]; 2],
