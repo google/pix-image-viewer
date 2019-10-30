@@ -49,9 +49,9 @@ impl Key {
         ))
     }
 
-    fn for_thumb(uid: u64) -> [u8; 9] {
+    fn for_thumb(tile_ref: crate::TileRef) -> [u8; 9] {
         let mut k: [u8; 9] = [TILE_PREFIX as u8; 9];
-        (&mut k[1..9]).copy_from_slice(&uid.to_be_bytes());
+        (&mut k[1..9]).copy_from_slice(&tile_ref.0.to_be_bytes());
         k
     }
 }
@@ -149,19 +149,19 @@ impl Database {
         Ok(())
     }
 
-    pub fn set(&self, uid: u64, data: &[u8]) -> R<()> {
+    pub fn set(&self, tile_ref: crate::TileRef, data: &[u8]) -> R<()> {
         let _s = ScopedDuration::new("database_set");
 
-        let k = Key::for_thumb(uid);
+        let k = Key::for_thumb(tile_ref);
         self.db.put(&k, data).map_err(E::RocksError)?;
 
         Ok(())
     }
 
-    pub fn get(&self, uid: u64) -> R<Option<Data>> {
+    pub fn get(&self, tile_ref: crate::TileRef) -> R<Option<Data>> {
         let _s = ScopedDuration::new("database_get");
 
-        let k = Key::for_thumb(uid);
+        let k = Key::for_thumb(tile_ref);
         if let Some(v) = self.db.get(k.as_ref()).map_err(E::RocksError)? {
             Ok(Some(Data(v)))
         } else {

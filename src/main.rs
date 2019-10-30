@@ -217,17 +217,67 @@ fn size_conversions() {
     assert_eq!(u8u32(7), 128);
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone)]
+pub struct TileRef(u64);
+
+impl TileRef {
+    fn new(size: u8, index: u64, chunk: u16) -> Self {
+        Self((chunk as u64) | ((index % (1u64 << 40)) << 16) | ((size as u64) << 56))
+    }
+
+    fn deconstruct(&self) -> (u8, u64, u16) {
+        let size = ((self.0 & 0xFF00_0000_0000_0000u64) >> 56) as u8;
+        let index = (self.0 & 0x00FF_FFFF_FFFF_0000u64) >> 16;
+        let chunk = (self.0 & 0x0000_0000_0000_FFFFu64) as u16;
+        (size, index, chunk)
+    }
+}
+
+#[test]
+fn tile_ref_test() {
+    assert_eq!(
+        TileRef::new(0xFFu8, 0u64, 0u16),
+        TileRef(0xFF00_0000_0000_0000u64)
+    );
+    assert_eq!(
+        TileRef::new(0xFFu8, 0u64, 0u16).deconstruct(),
+        (0xFFu8, 0u64, 0u16)
+    );
+    assert_eq!(
+        TileRef::new(0xFFu8, 0u64, 0u16).0.to_be_bytes(),
+        [0xFF, 0, 0, 0, 0, 0, 0, 0]
+    );
+
+    assert_eq!(
+        TileRef::new(0u8, 0x00FF_FFFF_FFFFu64, 0u16),
+        TileRef(0x00F_FFFFF_FFFF_0000u64)
+    );
+    assert_eq!(
+        TileRef::new(0u8, 0x00FF_FFFF_FFFFu64, 0u16).deconstruct(),
+        (0u8, 0x00FF_FFFF_FFFFu64, 0u16)
+    );
+
+    assert_eq!(
+        TileRef::new(0u8, 0u64, 0xFFFFu16),
+        TileRef(0x0000_0000_0000_FFFFu64)
+    );
+    assert_eq!(
+        TileRef::new(0u8, 0u64, 0xFFFFu16).deconstruct(),
+        (0u8, 0u64, 0xFFFFu16)
+    )
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Tiles {
     tile_size: u32,
     wc: u8,
     hc: u8,
-    refs: Vec<u64>,
+    refs: Vec<TileRef>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Refs {
-    One(u64),
+    One(TileRef),
     Many(Box<Tiles>),
 }
 
@@ -258,7 +308,7 @@ impl Draw for Thumb {
         &self,
         trans: [[f64; 3]; 2],
         zoom: f64,
-        tiles: &BTreeMap<u64, G2dTexture>,
+        tiles: &BTreeMap<TileRef, G2dTexture>,
         draw_state: &DrawState,
         g: &mut G2d,
     ) -> bool {
@@ -372,7 +422,7 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
     let mut thumbs: Vec<Thumb> = Vec::new();
 
-    let mut tiles: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
+    let mut tiles: BTreeMap<TileRef, Vec<u8>> = BTreeMap::new();
 
     while min_bucket <= bucket {
         let current_bucket = {
@@ -393,7 +443,7 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
         let mut chunk_id = 0u16;
 
-        let mut refs: Vec<u64> = Vec::new();
+        let mut refs: Vec<TileRef> = Vec::new();
 
         for y in 0..(hc as u32) {
             let (min_y, max_y) = (y * tile_size, std::cmp::min((y + 1) * tile_size, h));
@@ -416,7 +466,7 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
                 let mut buf = Vec::with_capacity((2 * tile_size * tile_size) as usize);
                 sub_image.write_to(&mut buf, format).expect("write_to");
 
-                let tile_id = make_tile_id(u32u8(bucket), uid, chunk_id);
+                let tile_id = TileRef::new(u32u8(bucket), uid, chunk_id);
                 chunk_id += 1;
 
                 tiles.insert(tile_id, buf);
@@ -473,7 +523,7 @@ trait Draw {
         &self,
         trans: [[f64; 3]; 2],
         zoom: f64,
-        tiles: &BTreeMap<u64, G2dTexture>,
+        tiles: &BTreeMap<TileRef, G2dTexture>,
         draw_state: &DrawState,
         g: &mut G2d,
     ) -> bool;
@@ -483,7 +533,6 @@ trait Draw {
 struct Image {
     file: Arc<File>,
     metadata: Option<R<Metadata>>,
-
 
     size: Option<usize>,
 }
@@ -503,7 +552,7 @@ impl Draw for Image {
         &self,
         trans: [[f64; 3]; 2],
         zoom: f64,
-        tiles: &BTreeMap<u64, G2dTexture>,
+        tiles: &BTreeMap<TileRef, G2dTexture>,
         draw_state: &DrawState,
         g: &mut G2d,
     ) -> bool {
@@ -534,7 +583,7 @@ struct App {
     window: PistonWindow,
     texture_context: G2dTextureContext,
 
-    tiles: BTreeMap<u64, G2dTexture>,
+    tiles: BTreeMap<TileRef, G2dTexture>,
 
     // Movement state & modes.
     view: View,
@@ -1034,7 +1083,7 @@ impl App {
         c: Context,
         g: &mut G2d,
         view: &View,
-        tiles: &BTreeMap<u64, G2dTexture>,
+        tiles: &BTreeMap<TileRef, G2dTexture>,
         images: &[Image],
     ) {
         clear([0.0, 0.0, 0.0, 1.0], g);
@@ -1197,33 +1246,6 @@ fn find_images(dirs: Vec<String>) -> Vec<Arc<File>> {
 
     ret.sort();
     ret
-}
-
-fn make_tile_id(size: u8, index: u64, chunk: u16) -> u64 {
-    assert!(index < (1u64 << 40));
-    (chunk as u64) | (index << 16) | ((size as u64) << 56)
-}
-
-#[allow(unused)]
-fn deconstruct_tile_id(tile_id: u64) -> (u8, u64, u16) {
-    let size = ((tile_id & 0xFF00_0000_0000_0000u64) >> 56) as u8;
-    let index = (tile_id & 0x00FF_FFFF_FFFF_0000u64) >> 16;
-    let chunk = (tile_id & 0x0000_0000_0000_FFFFu64) as u16;
-    (size, index, chunk)
-}
-
-#[test]
-fn tile_id_test() {
-    assert_eq!(make_tile_id(0xFFu8, 0u64, 0u16), 0xFF00_0000_0000_0000u64);
-    assert_eq!(
-        make_tile_id(0u8, 0x00FF_FFFF_FFFFu64, 0u16),
-        0x00F_FFFFF_FFFF_0000u64
-    );
-    assert_eq!(make_tile_id(0u8, 0u64, 0xFFFFu16), 0x0000_0000_0000_FFFFu64);
-    assert_eq!(
-        make_tile_id(0xFFu8, 0u64, 0u16).to_be_bytes(),
-        [0xFF, 0, 0, 0, 0, 0, 0, 0]
-    );
 }
 
 fn main() {
