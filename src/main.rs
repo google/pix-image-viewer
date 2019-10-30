@@ -217,21 +217,29 @@ fn size_conversions() {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Metadata {
-    thumbs: Vec<Thumb>,
+struct Tiles {
+    tile_size: u32,
+    wc: u8,
+    hc: u8,
+    refs: Vec<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum Refs {
+    One(u64),
+    Many(Box<Tiles>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Thumb {
-    // image metadata
     w: u32,
     h: u32,
+    refs: Refs,
+}
 
-    // tile metadata
-    tile_size: u32,
-    wc: u8,
-    hc: u8,
-    tiles: Vec<u64>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Metadata {
+    thumbs: Vec<Thumb>,
 }
 
 impl Thumb {
@@ -264,21 +272,29 @@ impl Draw for Thumb {
             (max_dimension - self.w) as f64 / 2.0,
             (max_dimension - self.h) as f64 / 2.0,
         );
-        assert!(xo == 0.0 || yo == 0.0);
 
-        let mut it = self.tiles.iter();
-
-        for ty in 0..(self.hc as u32) {
-            let ty = yo + (ty * self.tile_size) as f64;
-
-            for tx in 0..(self.wc as u32) {
-                let tx = xo + (tx * self.tile_size) as f64;
-
-                let tile = it.next().unwrap();
-
-                if let Some(texture) = tiles.get(tile) {
-                    let trans = trans.trans(tx, ty);
+        match &self.refs {
+            Refs::One(tile) => {
+                if let Some(texture) = tiles.get(&tile) {
+                    let trans = trans.trans(xo, yo);
                     img.draw(texture, &draw_state, trans, g);
+                }
+            }
+            Refs::Many(t) => {
+                let mut it = t.refs.iter();
+                for ty in 0..(t.hc as u32) {
+                    let ty = yo + (ty * t.tile_size) as f64;
+
+                    for tx in 0..(t.wc as u32) {
+                        let tx = xo + (tx * t.tile_size) as f64;
+
+                        let tile = it.next().unwrap();
+
+                        if let Some(texture) = tiles.get(tile) {
+                            let trans = trans.trans(tx, ty);
+                            img.draw(texture, &draw_state, trans, g);
+                        }
+                    }
                 }
             }
         }
@@ -374,16 +390,9 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
         let (tile_size, wc, hc) = tile_spec_for_image_size(target_tile_size, w, h);
 
-        let mut thumb = Thumb {
-            w,
-            h,
-            tile_size,
-            wc,
-            hc,
-            tiles: Vec::new(),
-        };
-
         let mut chunk_id = 0u16;
+
+        let mut refs: Vec<u64> = Vec::new();
 
         for y in 0..(hc as u32) {
             let (min_y, max_y) = (y * tile_size, std::cmp::min((y + 1) * tile_size, h));
@@ -411,9 +420,23 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
                 tiles.insert(tile_id, buf);
 
-                thumb.tiles.push(tile_id);
+                refs.push(tile_id);
             }
         }
+
+        let refs = if refs.len() == 1 {
+            Refs::One(*refs.first().unwrap())
+        } else {
+            let many = Tiles {
+                tile_size,
+                wc,
+                hc,
+                refs,
+            };
+            Refs::Many(Box::new(many))
+        };
+
+        let thumb = Thumb { w, h, refs };
 
         thumbs.push(thumb);
 
@@ -656,7 +679,12 @@ impl App {
                 };
 
                 for (j, thumb) in thumbs.iter().enumerate() {
-                    for &tile in &thumb.tiles {
+                    let tiles = match &thumb.refs {
+                        Refs::One(r) => vec![*r],
+                        Refs::Many(tiles) => tiles.refs.clone(),
+                    };
+
+                    for &tile in &tiles {
                         // visible & target chunks
                         if j == n {
                             // Already loaded.
