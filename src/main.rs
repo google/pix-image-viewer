@@ -37,6 +37,7 @@ use futures::future::RemoteHandle;
 use futures::select;
 use futures::task::SpawnExt;
 use piston_window::*;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ops::Bound::*;
 use std::sync::Arc;
@@ -679,10 +680,17 @@ impl App {
                     0
                 };
 
-                // Already loaded target size.
-                if Some(n) == image.size {
-                    continue;
-                }
+                let current_size = image.size.unwrap_or(0);
+
+                // Progressive resizing.
+                let n = match n.cmp(&current_size) {
+                    Ordering::Less => current_size - 1,
+                    Ordering::Equal => {
+                        // Already loaded target size.
+                        continue;
+                    }
+                    Ordering::Greater => current_size + 1,
+                };
 
                 let thumb = &thumbs[n];
 
@@ -743,6 +751,8 @@ impl App {
                 }
 
                 self.images[i].size = Some(n);
+
+                self.cache_todo[p].push_back(i);
             }
         }
 
