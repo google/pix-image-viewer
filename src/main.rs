@@ -481,15 +481,17 @@ trait Draw {
 
 #[derive(Default)]
 struct Image {
-    filepath: Arc<File>,
+    file: Arc<File>,
     metadata: Option<R<Metadata>>,
+
+
     size: Option<usize>,
 }
 
 impl Image {
-    fn from(filepath: Arc<File>, metadata: Option<Metadata>) -> Self {
+    fn from(file: Arc<File>, metadata: Option<Metadata>) -> Self {
         Image {
-            filepath,
+            file,
             metadata: metadata.map(Ok),
             ..Default::default()
         }
@@ -820,7 +822,7 @@ impl App {
                 }
 
                 let tile_id_index = self.base_id + i as u64;
-                let file = Arc::clone(&image.filepath);
+                let file = Arc::clone(&image.file);
                 let db = Arc::clone(&self.db);
 
                 let fut = async move { make_thumb(db, file, tile_id_index) };
@@ -1128,7 +1130,6 @@ impl App {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct File {
-    // TODO: Use bstring?
     path: String,
     modified: u64,
     file_size: u64,
