@@ -277,8 +277,7 @@ fn tile_ref_test() {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Thumb {
-    w: u32,
-    h: u32,
+    img_size: [u32; 2],
     tile_refs: Vec<TileRef>,
 }
 
@@ -318,7 +317,8 @@ impl TileSpec {
 
 impl Thumb {
     fn max_dimension(&self) -> u32 {
-        std::cmp::max(self.w, self.h)
+        let [w, h] = self.img_size;
+        std::cmp::max(w, h)
     }
 
     fn size(&self) -> u32 {
@@ -326,7 +326,8 @@ impl Thumb {
     }
 
     fn tile_spec(&self) -> TileSpec {
-        let (w, h) = (self.w as f64, self.h as f64);
+        let [w, h] = self.img_size;
+        let (w, h) = (w as f64, h as f64);
 
         let tile_w = w.log(8.) * 128.;
         let tile_h = h.log(8.) * 128.;
@@ -338,7 +339,7 @@ impl Thumb {
         let tile_h = (h / grid_h).ceil();
 
         TileSpec {
-            img_size: [self.w, self.h],
+            img_size: self.img_size,
             grid_size: [grid_w as u32, grid_h as u32],
             tile_size: [tile_w as u32, tile_h as u32],
         }
@@ -361,9 +362,11 @@ impl Draw for Thumb {
         let zoom = zoom / (max_dimension as f64);
         let trans = trans.zoom(zoom);
 
+        let [w, h] = self.img_size;
+
         let (x_offset, y_offset) = (
-            (max_dimension - self.w) as f64 / 2.0,
-            (max_dimension - self.h) as f64 / 2.0,
+            (max_dimension - w) as f64 / 2.,
+            (max_dimension - h) as f64 / 2.,
         );
 
         let tile_spec = self.tile_spec();
@@ -447,8 +450,7 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
         let mut chunk_id = 0u16;
 
         let mut thumb = Thumb {
-            w,
-            h,
+            img_size: [w, h],
             tile_refs: Vec::new(),
         };
 
