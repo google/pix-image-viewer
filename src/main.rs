@@ -202,69 +202,76 @@ impl View {
     }
 }
 
-fn u32u8(size: u32) -> u8 {
-    assert!(size.is_power_of_two());
-    (32 - size.leading_zeros() - 1) as u8
-}
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct Pow2(u8);
 
-fn u8u32(size: u8) -> u32 {
-    1 << size
+impl Pow2 {
+    fn from(i: u32) -> Self {
+        assert!(i.is_power_of_two());
+        Pow2((32 - i.leading_zeros() - 1) as u8)
+    }
+
+    fn u32(&self) -> u32 {
+        1 << self.0
+    }
 }
 
 #[test]
 fn size_conversions() {
-    assert_eq!(u32u8(128), 7);
-    assert_eq!(u8u32(7), 128);
+    assert_eq!(Pow2::from(128), Pow2(7));
+    assert_eq!(Pow2(7).u32(), 128);
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Default,
+)]
 pub struct TileRef(u64);
 
 impl TileRef {
-    fn new(size: u8, index: u64, chunk: u16) -> Self {
-        Self((chunk as u64) | ((index % (1u64 << 40)) << 16) | ((size as u64) << 56))
+    fn new(size: Pow2, index: u64, chunk: u16) -> Self {
+        Self((chunk as u64) | ((index % (1u64 << 40)) << 16) | ((size.0 as u64) << 56))
     }
 
     #[cfg(test)]
-    fn deconstruct(&self) -> (u8, u64, u16) {
+    fn deconstruct(&self) -> (Pow2, u64, u16) {
         let size = ((self.0 & 0xFF00_0000_0000_0000u64) >> 56) as u8;
         let index = (self.0 & 0x00FF_FFFF_FFFF_0000u64) >> 16;
         let chunk = (self.0 & 0x0000_0000_0000_FFFFu64) as u16;
-        (size, index, chunk)
+        (Pow2(size), index, chunk)
     }
 }
 
 #[test]
 fn tile_ref_test() {
     assert_eq!(
-        TileRef::new(0xFFu8, 0u64, 0u16),
+        TileRef::new(Pow2(0xFFu8), 0u64, 0u16),
         TileRef(0xFF00_0000_0000_0000u64)
     );
     assert_eq!(
-        TileRef::new(0xFFu8, 0u64, 0u16).deconstruct(),
-        (0xFFu8, 0u64, 0u16)
+        TileRef::new(Pow2(0xFFu8), 0u64, 0u16).deconstruct(),
+        (Pow2(0xFFu8), 0u64, 0u16)
     );
     assert_eq!(
-        TileRef::new(0xFFu8, 0u64, 0u16).0.to_be_bytes(),
+        TileRef::new(Pow2(0xFFu8), 0u64, 0u16).0.to_be_bytes(),
         [0xFF, 0, 0, 0, 0, 0, 0, 0]
     );
 
     assert_eq!(
-        TileRef::new(0u8, 0x00FF_FFFF_FFFFu64, 0u16),
+        TileRef::new(Pow2(0u8), 0x00FF_FFFF_FFFFu64, 0u16),
         TileRef(0x00F_FFFFF_FFFF_0000u64)
     );
     assert_eq!(
-        TileRef::new(0u8, 0x00FF_FFFF_FFFFu64, 0u16).deconstruct(),
-        (0u8, 0x00FF_FFFF_FFFFu64, 0u16)
+        TileRef::new(Pow2(0u8), 0x00FF_FFFF_FFFFu64, 0u16).deconstruct(),
+        (Pow2(0u8), 0x00FF_FFFF_FFFFu64, 0u16)
     );
 
     assert_eq!(
-        TileRef::new(0u8, 0u64, 0xFFFFu16),
+        TileRef::new(Pow2(0u8), 0u64, 0xFFFFu16),
         TileRef(0x0000_0000_0000_FFFFu64)
     );
     assert_eq!(
-        TileRef::new(0u8, 0u64, 0xFFFFu16).deconstruct(),
-        (0u8, 0u64, 0xFFFFu16)
+        TileRef::new(Pow2(0u8), 0u64, 0xFFFFu16).deconstruct(),
+        (Pow2(0u8), 0u64, 0xFFFFu16)
     )
 }
 
@@ -274,7 +281,7 @@ struct TileSpec {
     grid_size: [u8; 2],
 
     // Tile pixel size (width and height) in pow2.
-    tile_size: u8,
+    tile_size: Pow2,
 
     tile_refs: Vec<TileRef>,
 }
@@ -337,7 +344,7 @@ impl Draw for Thumb {
             }
             TileRefs::Many(tile_spec) => {
                 let [gw, gh] = tile_spec.grid_size;
-                let tile_size = u8u32(tile_spec.tile_size);
+                let tile_size = tile_spec.tile_size.u32();
                 let mut it = tile_spec.tile_refs.iter();
 
                 for y in (0..(gh as u32)).map(|h| y_offset + (h * tile_size) as f64) {
@@ -468,7 +475,7 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
                 let mut buf = Vec::with_capacity((2 * tile_size * tile_size) as usize);
                 sub_image.write_to(&mut buf, format).expect("write_to");
 
-                let tile_id = TileRef::new(u32u8(bucket), uid, chunk_id);
+                let tile_id = TileRef::new(Pow2::from(bucket), uid, chunk_id);
                 chunk_id += 1;
 
                 tiles.insert(tile_id, buf);
@@ -482,7 +489,7 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
         } else {
             TileRefs::Many(Box::new(TileSpec {
                 grid_size: [wc, hc],
-                tile_size: u32u8(tile_size),
+                tile_size: Pow2::from(tile_size),
                 tile_refs,
             }))
         };
@@ -760,7 +767,11 @@ impl App {
                     // load the tile from the cache
                     let _s3 = ScopedDuration::new("load_tile");
 
-                    let data = self.db.get(*tile_ref).expect("db get").expect("missing tile");
+                    let data = self
+                        .db
+                        .get(*tile_ref)
+                        .expect("db get")
+                        .expect("missing tile");
 
                     let image = ::image::load_from_memory(&data).expect("load image");
 
