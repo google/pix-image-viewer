@@ -286,6 +286,32 @@ pub struct Metadata {
     thumbs: Vec<Thumb>,
 }
 
+impl Metadata {
+    fn nearest(&self, target_size: u32) -> usize {
+        let mut found = None;
+
+        let ts_zeros = target_size.leading_zeros() as i16;
+
+        for (i, thumb) in self.thumbs.iter().enumerate() {
+            let size = thumb.size();
+            let size_zeros = size.leading_zeros() as i16;
+            let dist = (ts_zeros - size_zeros).abs();
+            if let Some((found_dist, found_i)) = found.take() {
+                if dist < found_dist {
+                    found = Some((dist, i));
+                } else {
+                    found = Some((found_dist, found_i));
+                }
+            } else {
+                found = Some((dist, i));
+            }
+        }
+
+        let (_, i) = found.unwrap();
+        i
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct TileSpec {
     img_size: [u32; 2],
@@ -383,33 +409,6 @@ impl Draw for Thumb {
         }
 
         true
-    }
-}
-
-trait Nearest<T> {
-    fn nearest(&self, target_size: u32) -> usize;
-}
-
-impl Nearest<Thumb> for Vec<Thumb> {
-    fn nearest(&self, target_size: u32) -> usize {
-        let mut found = None;
-
-        for (i, thumb) in self.iter().enumerate() {
-            let size = thumb.size();
-            let dist = (target_size as i64 - size as i64).abs();
-            if let Some((found_dist, found_i)) = found.take() {
-                if dist < found_dist {
-                    found = Some((dist, i));
-                } else {
-                    found = Some((found_dist, found_i));
-                }
-            } else {
-                found = Some((dist, i));
-            }
-        }
-
-        let (_, i) = found.unwrap();
-        i
     }
 }
 
@@ -710,11 +709,9 @@ impl App {
                     }
                 };
 
-                let thumbs = &metadata.thumbs;
-
                 // If visible
                 let n = if p == 0 {
-                    thumbs.nearest(target_size)
+                    metadata.nearest(target_size)
                 } else {
                     0
                 };
@@ -732,7 +729,7 @@ impl App {
                 };
 
                 // Load new tiles.
-                for tile_ref in &thumbs[n].tile_refs {
+                for tile_ref in &metadata.thumbs[n].tile_refs {
                     // Already loaded.
                     if self.tiles.contains_key(tile_ref) {
                         continue;
@@ -770,7 +767,7 @@ impl App {
                 }
 
                 // Unload old tiles.
-                for (j, thumb) in thumbs.iter().enumerate() {
+                for (j, thumb) in metadata.thumbs.iter().enumerate() {
                     if j == n {
                         continue;
                     }
