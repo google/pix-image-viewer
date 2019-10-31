@@ -276,32 +276,44 @@ fn tile_ref_test() {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct TileSpec {
-    // Grid width and height (in number of tiles).
-    grid_size: [u8; 2],
-
-    // Tile pixel size (width and height) in pow2.
-    tile_size: Pow2,
-
-    tile_refs: Vec<TileRef>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-enum TileRefs {
-    One(TileRef),
-    Many(Box<TileSpec>),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 struct Thumb {
     w: u32,
     h: u32,
-    tile_refs: TileRefs,
+    tile_refs: Vec<TileRef>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Metadata {
     thumbs: Vec<Thumb>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TileSpec {
+    img_size: [u32; 2],
+
+    // Grid width and height (in number of tiles).
+    grid_size: [u32; 2],
+
+    // Tile width and height in pixels.
+    tile_size: [u32; 2],
+}
+
+impl TileSpec {
+    fn ranges(img_size: u32, grid_size: u32, tile_size: u32) -> impl Iterator<Item = (u32, u32)> {
+        (0..grid_size).map(move |i| {
+            let min = i * tile_size;
+            let max = std::cmp::min(img_size, min + tile_size);
+            (min, max)
+        })
+    }
+
+    fn x_ranges(&self) -> impl Iterator<Item = (u32, u32)> {
+        Self::ranges(self.img_size[0], self.grid_size[0], self.tile_size[0])
+    }
+
+    fn y_ranges(&self) -> impl Iterator<Item = (u32, u32)> {
+        Self::ranges(self.img_size[1], self.grid_size[1], self.tile_size[1])
+    }
 }
 
 impl Thumb {
@@ -311,6 +323,25 @@ impl Thumb {
 
     fn size(&self) -> u32 {
         self.max_dimension().next_power_of_two()
+    }
+
+    fn tile_spec(&self) -> TileSpec {
+        let (w, h) = (self.w as f64, self.h as f64);
+
+        let tile_w = w.log(8.) * 128.;
+        let tile_h = h.log(8.) * 128.;
+
+        let grid_w = (w / tile_w).ceil();
+        let grid_h = (h / tile_h).ceil();
+
+        let tile_w = (w / grid_w).ceil();
+        let tile_h = (h / grid_h).ceil();
+
+        TileSpec {
+            img_size: [self.w, self.h],
+            grid_size: [grid_w as u32, grid_h as u32],
+            tile_size: [tile_w as u32, tile_h as u32],
+        }
     }
 }
 
@@ -335,26 +366,15 @@ impl Draw for Thumb {
             (max_dimension - self.h) as f64 / 2.0,
         );
 
-        match &self.tile_refs {
-            TileRefs::One(tile_ref) => {
-                if let Some(texture) = tiles.get(&tile_ref) {
-                    let trans = trans.trans(x_offset, y_offset);
-                    img.draw(texture, &draw_state, trans, g);
-                }
-            }
-            TileRefs::Many(tile_spec) => {
-                let [gw, gh] = tile_spec.grid_size;
-                let tile_size = tile_spec.tile_size.u32();
-                let mut it = tile_spec.tile_refs.iter();
+        let tile_spec = self.tile_spec();
 
-                for y in (0..(gh as u32)).map(|h| y_offset + (h * tile_size) as f64) {
-                    for x in (0..(gw as u32)).map(|w| x_offset + (w * tile_size) as f64) {
-                        let tile_ref = it.next().unwrap();
-                        if let Some(texture) = tiles.get(tile_ref) {
-                            let trans = trans.trans(x, y);
-                            img.draw(texture, &draw_state, trans, g);
-                        }
-                    }
+        let mut it = self.tile_refs.iter();
+        for (y, _) in tile_spec.y_ranges() {
+            for (x, _) in tile_spec.x_ranges() {
+                let tile_ref = it.next().unwrap();
+                if let Some(texture) = tiles.get(tile_ref) {
+                    let trans = trans.trans(x_offset + x as f64, y_offset + y as f64);
+                    img.draw(texture, &draw_state, trans, g);
                 }
             }
         }
@@ -390,28 +410,6 @@ impl Nearest<Thumb> for Vec<Thumb> {
     }
 }
 
-fn tile_spec_for_image_size(size: u32, w: u32, h: u32) -> (u32, u8, u8) {
-    // overflow check
-    assert!(size.is_power_of_two());
-
-    let wc = (w + size - 1) / size;
-    let hc = (h + size - 1) / size;
-
-    if wc < 256 && hc < 256 {
-        (size, wc as u8, hc as u8)
-    } else {
-        tile_spec_for_image_size(size << 1, w, h)
-    }
-}
-
-#[test]
-fn tile_counts_test() {
-    assert_eq!(tile_spec_for_image_size(256, 1, 1), (256, 1, 1));
-    assert_eq!(tile_spec_for_image_size(256, 256, 256), (256, 1, 1));
-    assert_eq!(tile_spec_for_image_size(256, 257, 256), (256, 2, 1));
-    assert_eq!(tile_spec_for_image_size(256, 257, 257), (256, 2, 2));
-}
-
 type ThumbRet = R<Metadata>;
 
 fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRet {
@@ -420,8 +418,6 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
     let mut image = ::image::open(&file.path).map_err(E::ImageError)?;
 
     let (w, h) = image.dimensions();
-
-    let target_tile_size = TARGET_TILE_SIZE;
 
     let orig_bucket = std::cmp::max(w, h).next_power_of_two();
 
@@ -448,22 +444,24 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
         let (w, h) = image.dimensions();
 
-        let (tile_size, wc, hc) = tile_spec_for_image_size(target_tile_size, w, h);
-
         let mut chunk_id = 0u16;
 
-        let mut tile_refs: Vec<TileRef> = Vec::new();
+        let mut thumb = Thumb {
+            w,
+            h,
+            tile_refs: Vec::new(),
+        };
 
-        for y in 0..(hc as u32) {
-            let (min_y, max_y) = (y * tile_size, std::cmp::min((y + 1) * tile_size, h));
+        let spec = thumb.tile_spec();
 
-            for x in 0..(wc as u32) {
-                let (min_x, max_x) = (x * tile_size, std::cmp::min((x + 1) * tile_size, w));
+        for (min_y, max_y) in spec.y_ranges() {
+            let y_range = max_y - min_y;
+
+            for (min_x, max_x) in spec.x_ranges() {
+                let x_range = max_x - min_x;
 
                 let sub_image = ::image::DynamicImage::ImageRgba8(
-                    image
-                        .sub_image(min_x, min_y, max_x - min_x, max_y - min_y)
-                        .to_image(),
+                    image.sub_image(min_x, min_y, x_range, y_range).to_image(),
                 );
 
                 let format = if lossy {
@@ -472,7 +470,7 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
                     ::image::ImageOutputFormat::JPEG(100)
                 };
 
-                let mut buf = Vec::with_capacity((2 * tile_size * tile_size) as usize);
+                let mut buf = Vec::with_capacity((2 * x_range * y_range) as usize);
                 sub_image.write_to(&mut buf, format).expect("write_to");
 
                 let tile_id = TileRef::new(Pow2::from(bucket), uid, chunk_id);
@@ -480,21 +478,9 @@ fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRe
 
                 tiles.insert(tile_id, buf);
 
-                tile_refs.push(tile_id);
+                thumb.tile_refs.push(tile_id);
             }
         }
-
-        let tile_refs = if tile_refs.len() == 1 {
-            TileRefs::One(tile_refs[0])
-        } else {
-            TileRefs::Many(Box::new(TileSpec {
-                grid_size: [wc, hc],
-                tile_size: Pow2::from(tile_size),
-                tile_refs,
-            }))
-        };
-
-        let thumb = Thumb { w, h, tile_refs };
 
         thumbs.push(thumb);
 
@@ -519,9 +505,6 @@ static UPS: u64 = 100;
 
 // TODO: make flag
 static MIN_SIZE: u32 = 8;
-
-// TODO: make flag
-static TARGET_TILE_SIZE: u32 = 128;
 
 static UPSIZE_FACTOR: f64 = 1.5;
 
@@ -746,19 +729,8 @@ impl App {
                     Ordering::Greater => current_size + 1,
                 };
 
-                let thumb = &thumbs[n];
-
-                let mut one_ref = [TileRef::default()];
-                let tile_refs: &[TileRef] = match &thumb.tile_refs {
-                    TileRefs::One(tile_ref) => {
-                        one_ref[0] = *tile_ref;
-                        &one_ref
-                    }
-                    TileRefs::Many(tile_spec) => &tile_spec.tile_refs,
-                };
-
                 // Load new tiles.
-                for tile_ref in tile_refs {
+                for tile_ref in &thumbs[n].tile_refs {
                     // Already loaded.
                     if self.tiles.contains_key(tile_ref) {
                         continue;
@@ -800,16 +772,9 @@ impl App {
                     if j == n {
                         continue;
                     }
-                    match &thumb.tile_refs {
-                        TileRefs::One(tile_ref) => {
-                            self.tiles.remove(tile_ref);
-                        }
-                        TileRefs::Many(tile_spec) => {
-                            for tile_ref in &tile_spec.tile_refs {
-                                self.tiles.remove(tile_ref);
-                            }
-                        }
-                    };
+                    for tile_ref in &thumb.tile_refs {
+                        self.tiles.remove(tile_ref);
+                    }
                 }
 
                 self.images[i].size = Some(n);
