@@ -719,11 +719,7 @@ impl App {
 
         // visible first
         for p in 0..self.cache_todo.len() {
-            // at most one pass through the list.
-            // TODO
-            for _ in 0..self.cache_todo[p].len() {
-                let i = self.cache_todo[p].pop_front().unwrap();
-
+            while let Some(i) = self.cache_todo[p].pop_front() {
                 let image = &self.images[i];
 
                 let metadata = match &image.metadata {
