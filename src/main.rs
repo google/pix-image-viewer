@@ -159,20 +159,20 @@ impl View {
         self.auto = false;
 
         let zoom = self.zoom;
-
         self.zoom = f64::max(self.min_zoom, zoom * ratio);
 
-        let delta = self.zoom - zoom;
+        let bias = {
+            let grid_pos = vec2_sub(self.mouse, self.trans);
+            let grid_px = vec2_scale(self.grid_size, zoom);
+            vec2_div(grid_pos, grid_px)
+        };
 
-        let pivot = vec2_sub(self.mouse, self.trans);
+        let trans = {
+            let grid_delta = vec2_scale(self.grid_size, self.zoom - zoom);
+            vec2_mul(grid_delta, bias)
+        };
 
-        let grid_px = vec2_scale(self.grid_size, zoom);
-
-        let bias = vec2_div(pivot, grid_px);
-
-        let grid_delta = vec2_scale(self.grid_size, delta);
-
-        self.trans = vec2_sub(self.trans, vec2_mul(grid_delta, bias));
+        self.trans = vec2_sub(self.trans, trans);
     }
 
     // TODO: Separate coordinates from visible check.
