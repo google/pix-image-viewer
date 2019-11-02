@@ -178,22 +178,22 @@ impl View {
     // TODO: Separate coordinates from visible check.
     // TODO: Convert visibility check into visible ratio.
     fn coords(&self, i: usize) -> (f64, f64, bool) {
-        let [w, h] = self.win_size;
+        let grid_w = self.grid_size[0] as usize;
 
-        let [grid_w, _] = self.grid_size;
+        let coords = [(i % grid_w) as f64, (i / grid_w) as f64];
 
-        let (x_min, y_min) = (
-            (i % grid_w as usize) as f64 * self.zoom,
-            (i / grid_w as usize) as f64 * self.zoom,
-        );
+        let min = vec2_scale(coords, self.zoom);
 
-        let (x_max, y_max) = (x_min + self.zoom, y_min + self.zoom);
+        let max = vec2_add(min, [self.zoom, self.zoom]);
 
-        let [x, y] = self.trans;
-        let is_visible =
-            ((x + x_max) > 0.0 && (x + x_min) < w) && ((y + y_max) > 0.0 && (y + y_min) < h);
+        let is_visible = {
+            let [w, h] = self.win_size;
+            let [x_min, y_min] = vec2_add(self.trans, min);
+            let [x_max, y_max] = vec2_add(self.trans, max);
+            (x_max > 0.0 && x_min < w) && (y_max > 0.0 && y_min < h)
+        };
 
-        (x_min, y_min, is_visible)
+        (min[0], min[1], is_visible)
     }
 }
 
