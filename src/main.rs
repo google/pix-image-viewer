@@ -162,20 +162,20 @@ impl View {
 
         self.zoom = f64::max(self.min_zoom, zoom * ratio);
 
-        let zd = self.zoom - zoom;
+        let delta = self.zoom - zoom;
 
         let [grid_w, _] = self.grid_size;
 
         let grid_size = grid_w as f64 * zoom;
 
-        let [x, y] = self.trans;
-        let [mouse_x, mouse_y] = self.mouse;
-        let x_bias = (mouse_x - x) / grid_size;
-        let y_bias = (mouse_y - y) / grid_size;
+        let [pivot_x, pivot_y] = vec2_sub(self.mouse, self.trans);
 
-        let pd = grid_w as f64 * zd;
+        let x_bias = pivot_x / grid_size;
+        let y_bias = pivot_y / grid_size;
 
-        self.trans = [x - (pd * x_bias), y - (pd * y_bias)];
+        let pd = grid_w as f64 * delta;
+
+        self.trans = vec2_sub(self.trans, [pd * x_bias, pd * y_bias]);
     }
 
     // TODO: Separate coordinates from visible check.
