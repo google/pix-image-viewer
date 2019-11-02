@@ -75,8 +75,7 @@ struct View {
     num_images: usize,
 
     // Window dimensions.
-    w: f64,
-    h: f64,
+    win_size: [f64; 2],
 
     // Logical dimensions.
     lw: i64,
@@ -101,8 +100,7 @@ impl View {
     fn new(num_images: usize) -> Self {
         Self {
             num_images,
-            w: 800.0,
-            h: 600.0,
+            win_size: [800., 600.],
             lw: 1,
             lh: 1,
             auto: true,
@@ -111,8 +109,9 @@ impl View {
     }
 
     fn center_mouse(&mut self) {
-        self.mx = self.w / 2.0;
-        self.my = self.h / 2.0;
+        let [w, h] = self.win_size;
+        self.mx = w / 2.;
+        self.my = h / 2.;
     }
 
     fn reset(&mut self) {
@@ -120,16 +119,18 @@ impl View {
         self.x = 0.0;
         self.y = 0.0;
 
-        let pixels_per_image = (self.w * self.h) / self.num_images as f64;
-        self.zoom = pixels_per_image.sqrt().floor();
+        let [w, h] = self.win_size;
 
-        self.lw = std::cmp::max(1, (self.w / self.zoom).floor() as i64);
+        let px_per_image = (w * h) / self.num_images as f64;
+        self.zoom = px_per_image.sqrt().floor();
+
+        self.lw = std::cmp::max(1, (w / self.zoom).floor() as i64);
         self.lh = (self.num_images as f64 / self.lw as f64).ceil() as i64;
 
         // Numer of rows takes the overflow, rescale to ensure the grid fits the window.
         let gh = self.lh as f64 * self.zoom;
-        if gh > self.h {
-            self.zoom *= self.h / gh;
+        if gh > h {
+            self.zoom *= h / gh;
         }
 
         // Add a black border.
@@ -138,13 +139,12 @@ impl View {
         // Recenter the grid.
         let gh = self.lh as f64 * self.zoom;
         let gw = self.lw as f64 * self.zoom;
-        self.x = (self.w - gw) / 2.0;
-        self.y = (self.h - gh) / 2.0;
+        self.x = (w - gw) / 2.;
+        self.y = (h - gh) / 2.;
     }
 
-    fn resize(&mut self, w: f64, h: f64, num_images: usize) {
-        self.w = w;
-        self.h = h;
+    fn resize(&mut self, win_size: [u32; 2], num_images: usize) {
+        self.win_size = [win_size[0] as f64, win_size[1] as f64];
         self.num_images = num_images;
         if self.auto {
             self.reset();
@@ -179,13 +179,11 @@ impl View {
         self.y -= pd * y_bias;
     }
 
-    fn dims(&self) -> [f64; 2] {
-        [self.w, self.h]
-    }
-
     // TODO: Separate coordinates from visible check.
     // TODO: Convert visibility check into visible ratio.
     fn coords(&self, i: usize) -> (f64, f64, bool) {
+        let [w, h] = self.win_size;
+
         let i = i as f64;
 
         let (x_min, y_min) = (
@@ -195,8 +193,8 @@ impl View {
 
         let (x_max, y_max) = (x_min + self.zoom, y_min + self.zoom);
 
-        let is_visible = ((self.x + x_max) > 0.0 && (self.x + x_min) < self.w)
-            && ((self.y + y_max) > 0.0 && (self.y + y_min) < self.h);
+        let is_visible = ((self.x + x_max) > 0.0 && (self.x + x_min) < w)
+            && ((self.y + y_max) > 0.0 && (self.y + y_min) < h);
 
         (x_min, y_min, is_visible)
     }
@@ -605,7 +603,7 @@ impl App {
     ) -> Self {
         let view = View::new(images.len());
 
-        let window_settings = WindowSettings::new("pix", view.dims())
+        let window_settings = WindowSettings::new("pix", view.win_size)
             .exit_on_esc(true)
             .fullscreen(false);
 
@@ -883,8 +881,8 @@ impl App {
         self.make_thumbs();
     }
 
-    fn resize(&mut self, w: f64, h: f64) {
-        self.view.resize(w, h, self.images.len());
+    fn resize(&mut self, win_size: [u32; 2]) {
+        self.view.resize(win_size, self.images.len());
         self.should_recalc = Some(());
     }
 
@@ -1115,7 +1113,7 @@ impl App {
 
                 e.resize(|args| {
                     let _s = ScopedDuration::new("resize");
-                    self.resize(args.draw_size[0] as f64, args.draw_size[1] as f64)
+                    self.resize(args.draw_size);
                 });
 
                 e.mouse_scroll(|hv| {
