@@ -46,8 +46,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ops::Bound::*;
 use std::sync::Arc;
-use std::time::Instant;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime, Duration};
 use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2};
 
 #[derive(Debug, Fail)]
@@ -784,9 +783,8 @@ impl App {
 
                     // Check if we've exhausted our time budget (we are in the main
                     // thread).
-                    if now.elapsed().unwrap() > std::time::Duration::from_millis(10) {
-                        // There might still be work to be done, resume from here next
-                        // time.
+                    if now.elapsed().unwrap() > Duration::from_millis(10) {
+                        // Resume processing this image on the next call.
                         self.cache_todo[p].push_front(i);
                         return true;
                     }
@@ -812,8 +810,7 @@ impl App {
     }
 
     fn enqueue(&mut self, i: usize) {
-        let coords = self.view.coords(i);
-        let is_visible = self.view.is_visible(coords);
+        let is_visible = self.view.is_visible(self.view.coords(i));
         let p = (!is_visible) as usize;
         self.cache_todo[p].push_front(i);
     }
