@@ -70,24 +70,26 @@ pub enum E {
 
 type R<T> = std::result::Result<T, E>;
 
+use vecmath::{Vector2, vec2_add, vec2_sub, vec2_scale};
+
 #[derive(Debug, Default)]
 struct View {
     num_images: usize,
 
     // Window dimensions.
-    win_size: [f64; 2],
+    win_size: Vector2<f64>,
 
     // Logical dimensions.
-    grid_size: [u32; 2],
+    grid_size: Vector2<u32>,
 
     // View offsets.
-    trans: [f64; 2],
+    trans: Vector2<f64>,
 
     // Scale from logical to physical coordinates.
     zoom: f64,
 
     // Mouse coordinates.
-    mouse: [f64; 2],
+    mouse: Vector2<f64>,
 
     // Has the user panned or zoomed?
     auto: bool,
@@ -105,8 +107,7 @@ impl View {
     }
 
     fn center_mouse(&mut self) {
-        let [w, h] = self.win_size;
-        self.mouse = [w / 2., h / 2.];
+        self.mouse = vec2_scale(self.win_size, 0.5);
     }
 
     fn reset(&mut self) {
