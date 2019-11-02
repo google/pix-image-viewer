@@ -175,20 +175,16 @@ impl View {
         self.trans = vec2_sub(self.trans, trans);
     }
 
-    // TODO: Separate coordinates from visible check.
-    // TODO: Convert visibility check into visible ratio.
-    fn coords(&self, i: usize) -> (f64, f64, bool) {
+    fn coords(&self, i: usize) -> Vector2<f64> {
         let grid_w = self.grid_size[0] as usize;
         let coords = [(i % grid_w) as f64, (i / grid_w) as f64];
-        let [x_min, y_min] = vec2_add(self.trans, vec2_scale(coords, self.zoom));
-        let [x_max, y_max] = vec2_add([x_min, y_min], [self.zoom, self.zoom]);
+        vec2_add(self.trans, vec2_scale(coords, self.zoom))
+    }
 
-        let is_visible = {
-            let [w, h] = self.win_size;
-            (x_max > 0.0 && x_min < w) && (y_max > 0.0 && y_min < h)
-        };
-
-        (x_min, y_min, is_visible)
+    fn is_visible(&self, min: Vector2<f64>) -> bool {
+        let max = vec2_add(min, [self.zoom, self.zoom]);
+        let [w, h] = self.win_size;
+        (max[0] > 0.0 && min[0] < w) && (max[1] > 0.0 && min[1] < h)
     }
 }
 
@@ -784,7 +780,8 @@ impl App {
     }
 
     fn enqueue(&mut self, i: usize) {
-        let (_, _, is_visible) = self.view.coords(i);
+        let coords = self.view.coords(i);
+        let is_visible = self.view.is_visible(coords);
         let p = (!is_visible) as usize;
         self.cache_todo[p].push_front(i);
     }
@@ -908,16 +905,15 @@ impl App {
             .collect();
 
         let v = &self.view;
-        let [m_x, m_y] = v.mouse;
-
         mouse_distance.sort_by_key(|&i| {
-            let (x, y, _) = v.coords(i);
-            let (dx, dy) = ((x - m_x), (y - m_y));
+            let coords = v.coords(i);
+            let [dx, dy] = vec2_sub(coords, v.mouse);
             ((dx * dx) + (dy * dy)) as usize
         });
 
-        let (hi, lo): (Vec<usize>, Vec<usize>) =
-            mouse_distance.into_iter().partition(|&i| v.coords(i).2);
+        let (hi, lo): (Vec<usize>, Vec<usize>) = mouse_distance
+            .into_iter()
+            .partition(|&i| v.is_visible(v.coords(i)));
 
         self.cache_todo[0].extend(hi.iter());
         self.cache_todo[1].extend(lo.iter());
@@ -1076,8 +1072,9 @@ impl App {
         let zoom = (view.zoom * view.zoom) / (view.zoom + 1.0);
 
         for (i, image) in images.iter().enumerate() {
-            let (x, y, is_visible) = view.coords(i);
-            if !is_visible {
+            let [x, y] = view.coords(i);
+
+            if !view.is_visible([x, y]) {
                 continue;
             }
 
