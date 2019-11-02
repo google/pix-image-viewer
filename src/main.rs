@@ -186,6 +186,40 @@ impl View {
         let [w, h] = self.win_size;
         (max[0] > 0.0 && min[0] < w) && (max[1] > 0.0 && min[1] < h)
     }
+
+    fn visible_ratio(&self, [x_min, y_min]: Vector2<f64>) -> f64 {
+        let [x_max, y_max] = vec2_add([x_min, y_min], [self.zoom, self.zoom]);
+        let [w, h] = self.win_size;
+        f64::max(
+            f64::min(((x_max / w) - 0.5).abs(), ((x_min / w) - 0.5).abs()),
+            f64::min(((y_max / h) - 0.5).abs(), ((y_min / h) - 0.5).abs()),
+        ) + 0.5
+    }
+}
+
+#[test]
+fn view_vis_test() {
+    let view = View {
+        win_size: [200.0, 100.0],
+        grid_size: [20.0, 10.0],
+        zoom: 10.0,
+        ..Default::default()
+    };
+
+    assert_eq!(view.coords(0), [0.0, 0.0]);
+    assert_eq!(view.coords(1), [10.0, 0.0]);
+    assert_eq!(view.coords(20), [0.0, 10.0]);
+
+    assert_eq!(view.visible_ratio([0.0, 0.0]), 0.95);
+    assert_eq!(view.visible_ratio([190.0, 0.0]), 0.95);
+    assert_eq!(view.visible_ratio([190.0, 90.0]), 0.95);
+    assert_eq!(view.visible_ratio([0.0, 90.0]), 0.95);
+
+    assert_eq!(view.visible_ratio([-20.0, 0.0]), 1.05);
+    assert_eq!(view.visible_ratio([210.0, 0.0]), 1.05);
+
+    assert_eq!(view.visible_ratio([0.0, -20.0]), 1.1);
+    assert_eq!(view.visible_ratio([0.0, 110.0]), 1.1);
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -707,7 +741,9 @@ impl App {
                 let n = if p == 0 {
                     metadata.nearest(target_size)
                 } else {
-                    0
+                    let ratio = self.view.visible_ratio(self.view.coords(i));
+                    let shift = f64::max(0.0, ratio - 1.0).floor() as usize;
+                    metadata.nearest(target_size >> shift)
                 };
 
                 let current_size = image.size.unwrap_or(0);
