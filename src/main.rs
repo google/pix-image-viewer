@@ -72,7 +72,7 @@ type R<T> = std::result::Result<T, E>;
 
 #[derive(Debug, Default)]
 struct View {
-    num_images: usize,
+    num_images: f64,
 
     // Window dimensions.
     win_size: Vector2<f64>,
@@ -96,7 +96,7 @@ struct View {
 impl View {
     fn new(num_images: usize) -> Self {
         Self {
-            num_images,
+            num_images: num_images as f64,
             win_size: [800., 600.],
             grid_size: [1.0, 1.0],
             auto: true,
@@ -111,18 +111,16 @@ impl View {
     fn reset(&mut self) {
         self.auto = true;
 
-        let num_images = self.num_images as f64;
-
         let [w, h] = self.win_size;
 
         self.zoom = {
-            let px_per_image = (w * h) / num_images;
+            let px_per_image = (w * h) / self.num_images;
             px_per_image.sqrt()
         };
 
         self.grid_size = {
             let grid_w = f64::max(1.0, (w / self.zoom).floor());
-            let grid_h = (num_images / grid_w).ceil();
+            let grid_h = (self.num_images / grid_w).ceil();
             [grid_w, grid_h]
         };
 
@@ -142,9 +140,8 @@ impl View {
         };
     }
 
-    fn resize(&mut self, win_size: [f64; 2], num_images: usize) {
+    fn resize(&mut self, win_size: Vector2<f64>) {
         self.win_size = win_size;
-        self.num_images = num_images;
         if self.auto {
             self.reset();
         }
@@ -885,8 +882,8 @@ impl App {
         self.make_thumbs();
     }
 
-    fn resize(&mut self, win_size: [f64; 2]) {
-        self.view.resize(win_size, self.images.len());
+    fn resize(&mut self, win_size: Vector2<f64>) {
+        self.view.resize(win_size);
         self.should_recalc = Some(());
     }
 
