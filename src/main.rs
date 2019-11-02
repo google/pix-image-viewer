@@ -78,8 +78,7 @@ struct View {
     win_size: [f64; 2],
 
     // Logical dimensions.
-    lw: i64,
-    lh: i64,
+    grid_size: [u32; 2],
 
     // View offsets.
     x: f64,
@@ -101,8 +100,7 @@ impl View {
         Self {
             num_images,
             win_size: [800., 600.],
-            lw: 1,
-            lh: 1,
+            grid_size: [1, 1],
             auto: true,
             ..Default::default()
         }
@@ -116,31 +114,39 @@ impl View {
 
     fn reset(&mut self) {
         self.auto = true;
-        self.x = 0.0;
-        self.y = 0.0;
+
+        let num_images = self.num_images as f64;
 
         let [w, h] = self.win_size;
 
-        let px_per_image = (w * h) / self.num_images as f64;
+        let px_per_image = (w * h) / num_images;
+
         self.zoom = px_per_image.sqrt().floor();
 
-        self.lw = std::cmp::max(1, (w / self.zoom).floor() as i64);
-        self.lh = (self.num_images as f64 / self.lw as f64).ceil() as i64;
+        let grid_w = std::cmp::max(1, (w / self.zoom).floor() as u32);
+        let grid_h = (num_images / grid_w as f64).ceil() as u32;
+        self.grid_size = [grid_w, grid_h];
+
+        let (grid_w, grid_h) = (grid_w as f64, grid_h as f64);
 
         // Numer of rows takes the overflow, rescale to ensure the grid fits the window.
-        let gh = self.lh as f64 * self.zoom;
-        if gh > h {
-            self.zoom *= h / gh;
+        let grid_h_px = grid_h * self.zoom;
+        if grid_h_px > h {
+            self.zoom *= h / grid_h_px;
         }
 
         // Add a black border.
         self.zoom *= 0.95;
 
         // Recenter the grid.
-        let gh = self.lh as f64 * self.zoom;
-        let gw = self.lw as f64 * self.zoom;
-        self.x = (w - gw) / 2.;
-        self.y = (h - gh) / 2.;
+        let grid_w_px = grid_w * self.zoom;
+        let grid_h_px = grid_h * self.zoom;
+
+        assert!(grid_w_px <= w);
+        assert!(grid_h_px <= h);
+
+        self.x = (w - grid_w_px) / 2.;
+        self.y = (h - grid_h_px) / 2.;
     }
 
     fn resize(&mut self, win_size: [u32; 2], num_images: usize) {
@@ -160,7 +166,7 @@ impl View {
     fn zoom_by(&mut self, r: f64) {
         self.auto = false;
 
-        let z = self.zoom;
+        let zoom = self.zoom;
         self.zoom *= 1.0 + r;
 
         // min size
@@ -168,13 +174,15 @@ impl View {
             self.zoom = 8.0;
         }
 
-        let zd = self.zoom - z;
+        let zd = self.zoom - zoom;
 
-        let grid_size = self.lw as f64 * z;
+        let [grid_w, _] = self.grid_size;
+
+        let grid_size = grid_w as f64 * zoom;
         let x_bias = (self.mx - self.x) / grid_size;
         let y_bias = (self.my - self.y) / grid_size;
 
-        let pd = self.lw as f64 * zd;
+        let pd = grid_w as f64 * zd;
         self.x -= pd * x_bias;
         self.y -= pd * y_bias;
     }
@@ -184,11 +192,11 @@ impl View {
     fn coords(&self, i: usize) -> (f64, f64, bool) {
         let [w, h] = self.win_size;
 
-        let i = i as f64;
+        let [grid_w, _] = self.grid_size;
 
         let (x_min, y_min) = (
-            (i as i64 % self.lw as i64) as f64 * self.zoom,
-            (i as i64 / self.lw as i64) as f64 * self.zoom,
+            (i % grid_w as usize) as f64 * self.zoom,
+            (i / grid_w as usize) as f64 * self.zoom,
         );
 
         let (x_max, y_max) = (x_min + self.zoom, y_min + self.zoom);
