@@ -179,21 +179,16 @@ impl View {
     // TODO: Convert visibility check into visible ratio.
     fn coords(&self, i: usize) -> (f64, f64, bool) {
         let grid_w = self.grid_size[0] as usize;
-
         let coords = [(i % grid_w) as f64, (i / grid_w) as f64];
-
-        let min = vec2_scale(coords, self.zoom);
-
-        let max = vec2_add(min, [self.zoom, self.zoom]);
+        let [x_min, y_min] = vec2_add(self.trans, vec2_scale(coords, self.zoom));
+        let [x_max, y_max] = vec2_add([x_min, y_min], [self.zoom, self.zoom]);
 
         let is_visible = {
             let [w, h] = self.win_size;
-            let [x_min, y_min] = vec2_add(self.trans, min);
-            let [x_max, y_max] = vec2_add(self.trans, max);
             (x_max > 0.0 && x_min < w) && (y_max > 0.0 && y_min < h)
         };
 
-        (min[0], min[1], is_visible)
+        (x_min, y_min, is_visible)
     }
 }
 
@@ -913,12 +908,11 @@ impl App {
             .collect();
 
         let v = &self.view;
-        let [v_x, v_y] = v.trans;
         let [m_x, m_y] = v.mouse;
 
         mouse_distance.sort_by_key(|&i| {
             let (x, y, _) = v.coords(i);
-            let (dx, dy) = ((v_x + x - m_x), (v_y + y - m_y));
+            let (dx, dy) = ((x - m_x), (y - m_y));
             ((dx * dx) + (dy * dy)) as usize
         });
 
@@ -1071,10 +1065,6 @@ impl App {
         images: &[Image],
     ) {
         clear([0.0, 0.0, 0.0, 1.0], g);
-        let c = {
-            let [x, y] = view.trans;
-            c.trans(x, y)
-        };
 
         let args = e.render_args().expect("render args");
         let draw_state = DrawState::default().scissor([0, 0, args.draw_size[0], args.draw_size[1]]);
