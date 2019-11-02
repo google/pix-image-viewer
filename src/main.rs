@@ -25,6 +25,11 @@ extern crate log;
 extern crate serde_derive;
 #[macro_use]
 extern crate failure;
+#[macro_use]
+extern crate lazy_static;
+
+mod database;
+mod stats;
 
 use crate::stats::ScopedDuration;
 use ::image::GenericImage;
@@ -43,12 +48,7 @@ use std::ops::Bound::*;
 use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
-
-#[macro_use]
-extern crate lazy_static;
-
-mod database;
-mod stats;
+use vecmath::{vec2_add, vec2_scale, vec2_sub, Vector2};
 
 #[derive(Debug, Fail)]
 pub enum E {
@@ -70,8 +70,6 @@ pub enum E {
 
 type R<T> = std::result::Result<T, E>;
 
-use vecmath::{Vector2, vec2_add, vec2_sub, vec2_scale};
-
 #[derive(Debug, Default)]
 struct View {
     num_images: usize,
@@ -80,7 +78,7 @@ struct View {
     win_size: Vector2<f64>,
 
     // Logical dimensions.
-    grid_size: Vector2<u32>,
+    grid_size: Vector2<f64>,
 
     // View offsets.
     trans: Vector2<f64>,
@@ -100,7 +98,7 @@ impl View {
         Self {
             num_images,
             win_size: [800., 600.],
-            grid_size: [1, 1],
+            grid_size: [1.0, 1.0],
             auto: true,
             ..Default::default()
         }
@@ -117,37 +115,35 @@ impl View {
 
         let [w, h] = self.win_size;
 
-        let px_per_image = (w * h) / num_images;
+        self.zoom = {
+            let px_per_image = (w * h) / num_images;
+            px_per_image.sqrt()
+        };
 
-        self.zoom = px_per_image.sqrt().floor();
-
-        let grid_w = std::cmp::max(1, (w / self.zoom).floor() as u32);
-        let grid_h = (num_images / grid_w as f64).ceil() as u32;
-        self.grid_size = [grid_w, grid_h];
-
-        let (grid_w, grid_h) = (grid_w as f64, grid_h as f64);
+        self.grid_size = {
+            let grid_w = f64::max(1.0, (w / self.zoom).floor());
+            let grid_h = (num_images / grid_w).ceil();
+            [grid_w, grid_h]
+        };
 
         // Numer of rows takes the overflow, rescale to ensure the grid fits the window.
-        let grid_h_px = grid_h * self.zoom;
-        if grid_h_px > h {
-            self.zoom *= h / grid_h_px;
+        let grid_px = vec2_scale(self.grid_size, self.zoom);
+        if h < grid_px[1] {
+            self.zoom *= h / grid_px[1];
         }
 
-        // Add a black border.
+        // Add black border.
         self.zoom *= 0.95;
 
-        // Recenter the grid.
-        let grid_w_px = grid_w * self.zoom;
-        let grid_h_px = grid_h * self.zoom;
-
-        assert!(grid_w_px <= w);
-        assert!(grid_h_px <= h);
-
-        self.trans = [ (w - grid_w_px) / 2., (h - grid_h_px) / 2. ];
+        self.trans = {
+            let grid_px = vec2_scale(self.grid_size, self.zoom);
+            let border_px = vec2_sub(self.win_size, grid_px);
+            vec2_scale(border_px, 0.5)
+        };
     }
 
-    fn resize(&mut self, win_size: [u32; 2], num_images: usize) {
-        self.win_size = [win_size[0] as f64, win_size[1] as f64];
+    fn resize(&mut self, win_size: [f64; 2], num_images: usize) {
+        self.win_size = win_size;
         self.num_images = num_images;
         if self.auto {
             self.reset();
@@ -201,8 +197,8 @@ impl View {
         let (x_max, y_max) = (x_min + self.zoom, y_min + self.zoom);
 
         let [x, y] = self.trans;
-        let is_visible = ((x + x_max) > 0.0 && (x + x_min) < w)
-            && ((y + y_max) > 0.0 && (y + y_min) < h);
+        let is_visible =
+            ((x + x_max) > 0.0 && (x + x_min) < w) && ((y + y_max) > 0.0 && (y + y_min) < h);
 
         (x_min, y_min, is_visible)
     }
@@ -889,7 +885,7 @@ impl App {
         self.make_thumbs();
     }
 
-    fn resize(&mut self, win_size: [u32; 2]) {
+    fn resize(&mut self, win_size: [f64; 2]) {
         self.view.resize(win_size, self.images.len());
         self.should_recalc = Some(());
     }
@@ -1125,7 +1121,8 @@ impl App {
 
                 e.resize(|args| {
                     let _s = ScopedDuration::new("resize");
-                    self.resize(args.draw_size);
+                    let [w, h] = args.draw_size;
+                    self.resize([w as f64, h as f64]);
                 });
 
                 e.mouse_scroll(|hv| {
