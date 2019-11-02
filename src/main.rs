@@ -87,8 +87,7 @@ struct View {
     zoom: f64,
 
     // Mouse coordinates.
-    mx: f64,
-    my: f64,
+    mouse: [f64; 2],
 
     // Has the user panned or zoomed?
     auto: bool,
@@ -107,8 +106,7 @@ impl View {
 
     fn center_mouse(&mut self) {
         let [w, h] = self.win_size;
-        self.mx = w / 2.;
-        self.my = h / 2.;
+        self.mouse = [w / 2., h / 2.];
     }
 
     fn reset(&mut self) {
@@ -178,8 +176,9 @@ impl View {
         let grid_size = grid_w as f64 * zoom;
 
         let [x, y] = self.trans;
-        let x_bias = (self.mx - x) / grid_size;
-        let y_bias = (self.my - y) / grid_size;
+        let [mouse_x, mouse_y] = self.mouse;
+        let x_bias = (mouse_x - x) / grid_size;
+        let y_bias = (mouse_y - y) / grid_size;
 
         let pd = grid_w as f64 * zd;
 
@@ -917,10 +916,11 @@ impl App {
 
         let v = &self.view;
         let [v_x, v_y] = v.trans;
+        let [m_x, m_y] = v.mouse;
 
         mouse_distance.sort_by_key(|&i| {
             let (x, y, _) = v.coords(i);
-            let (dx, dy) = ((v_x + x - v.mx), (v_y + y - v.my));
+            let (dx, dy) = ((v_x + x - m_x), (v_y + y - m_y));
             ((dx * dx) + (dy * dy)) as usize
         });
 
@@ -932,8 +932,7 @@ impl App {
     }
 
     fn mouse_cursor(&mut self, x: f64, y: f64) {
-        self.view.mx = x;
-        self.view.my = y;
+        self.view.mouse = [x, y];
 
         let (ox, oy) = self.mouse_order_xy;
         let dist = ((x - ox) as u64).checked_pow(2).unwrap_or(0)
