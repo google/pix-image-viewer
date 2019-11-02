@@ -147,9 +147,9 @@ impl View {
         }
     }
 
-    fn move_by(&mut self, x: f64, y: f64) {
+    fn trans(&mut self, trans: Vector2<f64>) {
         self.auto = false;
-        self.trans = [self.trans[0] + x, self.trans[1] + y];
+        self.trans = vec2_add(self.trans, trans);
     }
 
     fn zoom_by(&mut self, r: f64) {
@@ -947,12 +947,12 @@ impl App {
         }
     }
 
-    fn mouse_relative(&mut self, dx: f64, dy: f64) {
+    fn mouse_relative(&mut self, delta: Vector2<f64>) {
         if self.panning {
             if self.cursor_captured {
                 self.view.center_mouse();
             }
-            self.move_by(dx * 4.0, dy * 4.0);
+            self.trans(vec2_scale(delta, 4.0));
         }
     }
 
@@ -977,8 +977,8 @@ impl App {
         }
     }
 
-    fn move_by(&mut self, x: f64, y: f64) {
-        self.view.move_by(x, y);
+    fn trans(&mut self, trans: Vector2<f64>) {
+        self.view.trans(trans);
         self.should_recalc = Some(());
     }
 
@@ -1012,19 +1012,19 @@ impl App {
             }
 
             (ButtonState::Press, Button::Keyboard(Key::Up)) => {
-                self.move_by(0.0, self.shift_increment());
+                self.trans([0.0, self.shift_increment()]);
             }
 
             (ButtonState::Press, Button::Keyboard(Key::Down)) => {
-                self.move_by(0.0, -self.shift_increment());
+                self.trans([0.0, -self.shift_increment()]);
             }
 
             (ButtonState::Press, Button::Keyboard(Key::Left)) => {
-                self.move_by(self.shift_increment(), 0.0);
+                self.trans([self.shift_increment(), 0.0]);
             }
 
             (ButtonState::Press, Button::Keyboard(Key::Right)) => {
-                self.move_by(-self.shift_increment(), 0.0);
+                self.trans([-self.shift_increment(), 0.0]);
             }
 
             (ButtonState::Press, Button::Keyboard(Key::PageUp)) => {
@@ -1132,9 +1132,9 @@ impl App {
                     self.mouse_cursor(xy[0], xy[1]);
                 });
 
-                e.mouse_relative(|dxdy| {
+                e.mouse_relative(|delta| {
                     let _s = ScopedDuration::new("mouse_relative");
-                    self.mouse_relative(dxdy[0], dxdy[1]);
+                    self.mouse_relative(delta);
                 });
 
                 e.button(|b| {
