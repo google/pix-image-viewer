@@ -48,7 +48,7 @@ use std::ops::Bound::*;
 use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
-use vecmath::{vec2_add, vec2_scale, vec2_sub, Vector2};
+use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2};
 
 #[derive(Debug, Fail)]
 pub enum E {
@@ -164,18 +164,15 @@ impl View {
 
         let delta = self.zoom - zoom;
 
-        let [grid_w, _] = self.grid_size;
+        let pivot = vec2_sub(self.mouse, self.trans);
 
-        let grid_size = grid_w * zoom;
+        let grid_px = vec2_scale(self.grid_size, zoom);
 
-        let [pivot_x, pivot_y] = vec2_sub(self.mouse, self.trans);
+        let bias = vec2_div(pivot, grid_px);
 
-        let x_bias = pivot_x / grid_size;
-        let y_bias = pivot_y / grid_size;
+        let grid_delta = vec2_scale(self.grid_size, delta);
 
-        let pd = grid_w * delta;
-
-        self.trans = vec2_sub(self.trans, [pd * x_bias, pd * y_bias]);
+        self.trans = vec2_sub(self.trans, vec2_mul(grid_delta, bias));
     }
 
     // TODO: Separate coordinates from visible check.
@@ -594,6 +591,14 @@ struct App {
     base_id: u64,
 }
 
+#[inline(always)]
+fn vec2_div<T>(a: Vector2<T>, b: Vector2<T>) -> Vector2<T>
+where
+    T: Copy + std::ops::Div<T, Output = T>,
+{
+    [a[0] / b[0], a[1] / b[1]]
+}
+
 impl App {
     fn new(
         images: Vec<Image>,
@@ -939,10 +944,10 @@ impl App {
 
     fn mouse_scroll(&mut self, _h: f64, v: f64) {
         for _ in 0..(v as i64) {
-            self.zoom(1.0+self.zoom_increment());
+            self.zoom(1.0 + self.zoom_increment());
         }
         for _ in (v as i64)..0 {
-            self.zoom(1.0-self.zoom_increment());
+            self.zoom(1.0 - self.zoom_increment());
         }
     }
 
@@ -1028,12 +1033,12 @@ impl App {
 
             (ButtonState::Press, Button::Keyboard(Key::PageUp)) => {
                 self.view.center_mouse();
-                self.zoom(1.0-self.zoom_increment());
+                self.zoom(1.0 - self.zoom_increment());
             }
 
             (ButtonState::Press, Button::Keyboard(Key::PageDown)) => {
                 self.view.center_mouse();
-                self.zoom(1.0+self.zoom_increment());
+                self.zoom(1.0 + self.zoom_increment());
             }
 
             (state, Button::Keyboard(Key::LShift)) | (state, Button::Keyboard(Key::RShift)) => {
