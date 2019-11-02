@@ -166,14 +166,14 @@ impl View {
 
         let [grid_w, _] = self.grid_size;
 
-        let grid_size = grid_w as f64 * zoom;
+        let grid_size = grid_w * zoom;
 
         let [pivot_x, pivot_y] = vec2_sub(self.mouse, self.trans);
 
         let x_bias = pivot_x / grid_size;
         let y_bias = pivot_y / grid_size;
 
-        let pd = grid_w as f64 * delta;
+        let pd = grid_w * delta;
 
         self.trans = vec2_sub(self.trans, [pd * x_bias, pd * y_bias]);
     }
