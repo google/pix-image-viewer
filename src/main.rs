@@ -85,6 +85,7 @@ struct View {
 
     // Scale from logical to physical coordinates.
     zoom: f64,
+    min_zoom: f64,
 
     // Mouse coordinates.
     mouse: Vector2<f64>,
@@ -133,6 +134,8 @@ impl View {
         // Add black border.
         self.zoom *= 0.95;
 
+        self.min_zoom = self.zoom * 0.5;
+
         self.trans = {
             let grid_px = vec2_scale(self.grid_size, self.zoom);
             let border_px = vec2_sub(self.win_size, grid_px);
@@ -152,16 +155,12 @@ impl View {
         self.trans = vec2_add(self.trans, trans);
     }
 
-    fn zoom_by(&mut self, r: f64) {
+    fn zoom(&mut self, ratio: f64) {
         self.auto = false;
 
         let zoom = self.zoom;
-        self.zoom *= 1.0 + r;
 
-        // min size
-        if self.zoom < 8.0 {
-            self.zoom = 8.0;
-        }
+        self.zoom = f64::max(self.min_zoom, zoom * ratio);
 
         let zd = self.zoom - zoom;
 
@@ -865,7 +864,7 @@ impl App {
         let now = SystemTime::now();
 
         if let Some(z) = self.zooming {
-            self.zoom_by(z * args.dt);
+            self.zoom(1.0 + (z * args.dt));
             return;
         }
 
@@ -940,10 +939,10 @@ impl App {
 
     fn mouse_scroll(&mut self, _h: f64, v: f64) {
         for _ in 0..(v as i64) {
-            self.zoom_by(self.zoom_increment());
+            self.zoom(1.0+self.zoom_increment());
         }
         for _ in (v as i64)..0 {
-            self.zoom_by(-self.zoom_increment());
+            self.zoom(1.0-self.zoom_increment());
         }
     }
 
@@ -982,8 +981,8 @@ impl App {
         self.should_recalc = Some(());
     }
 
-    fn zoom_by(&mut self, r: f64) {
-        self.view.zoom_by(r);
+    fn zoom(&mut self, ratio: f64) {
+        self.view.zoom(ratio);
         self.should_recalc = Some(());
     }
 
@@ -1029,12 +1028,12 @@ impl App {
 
             (ButtonState::Press, Button::Keyboard(Key::PageUp)) => {
                 self.view.center_mouse();
-                self.zoom_by(-self.zoom_increment());
+                self.zoom(1.0-self.zoom_increment());
             }
 
             (ButtonState::Press, Button::Keyboard(Key::PageDown)) => {
                 self.view.center_mouse();
-                self.zoom_by(self.zoom_increment());
+                self.zoom(1.0+self.zoom_increment());
             }
 
             (state, Button::Keyboard(Key::LShift)) | (state, Button::Keyboard(Key::RShift)) => {
