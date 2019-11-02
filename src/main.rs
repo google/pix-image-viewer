@@ -81,8 +81,7 @@ struct View {
     grid_size: [u32; 2],
 
     // View offsets.
-    x: f64,
-    y: f64,
+    trans: [f64; 2],
 
     // Scale from logical to physical coordinates.
     zoom: f64,
@@ -145,8 +144,7 @@ impl View {
         assert!(grid_w_px <= w);
         assert!(grid_h_px <= h);
 
-        self.x = (w - grid_w_px) / 2.;
-        self.y = (h - grid_h_px) / 2.;
+        self.trans = [ (w - grid_w_px) / 2., (h - grid_h_px) / 2. ];
     }
 
     fn resize(&mut self, win_size: [u32; 2], num_images: usize) {
@@ -159,8 +157,7 @@ impl View {
 
     fn move_by(&mut self, x: f64, y: f64) {
         self.auto = false;
-        self.x += x;
-        self.y += y;
+        self.trans = [self.trans[0] + x, self.trans[1] + y];
     }
 
     fn zoom_by(&mut self, r: f64) {
@@ -179,12 +176,14 @@ impl View {
         let [grid_w, _] = self.grid_size;
 
         let grid_size = grid_w as f64 * zoom;
-        let x_bias = (self.mx - self.x) / grid_size;
-        let y_bias = (self.my - self.y) / grid_size;
+
+        let [x, y] = self.trans;
+        let x_bias = (self.mx - x) / grid_size;
+        let y_bias = (self.my - y) / grid_size;
 
         let pd = grid_w as f64 * zd;
-        self.x -= pd * x_bias;
-        self.y -= pd * y_bias;
+
+        self.trans = [x - (pd * x_bias), y - (pd * y_bias)];
     }
 
     // TODO: Separate coordinates from visible check.
@@ -201,8 +200,9 @@ impl View {
 
         let (x_max, y_max) = (x_min + self.zoom, y_min + self.zoom);
 
-        let is_visible = ((self.x + x_max) > 0.0 && (self.x + x_min) < w)
-            && ((self.y + y_max) > 0.0 && (self.y + y_min) < h);
+        let [x, y] = self.trans;
+        let is_visible = ((x + x_max) > 0.0 && (x + x_min) < w)
+            && ((y + y_max) > 0.0 && (y + y_min) < h);
 
         (x_min, y_min, is_visible)
     }
@@ -916,9 +916,11 @@ impl App {
             .collect();
 
         let v = &self.view;
+        let [v_x, v_y] = v.trans;
+
         mouse_distance.sort_by_key(|&i| {
             let (x, y, _) = v.coords(i);
-            let (dx, dy) = ((v.x + x - v.mx), (v.y + y - v.my));
+            let (dx, dy) = ((v_x + x - v.mx), (v_y + y - v.my));
             ((dx * dx) + (dy * dy)) as usize
         });
 
@@ -1072,8 +1074,10 @@ impl App {
         images: &[Image],
     ) {
         clear([0.0, 0.0, 0.0, 1.0], g);
-
-        let c = c.trans(view.x, view.y);
+        let c = {
+            let [x, y] = view.trans;
+            c.trans(x, y)
+        };
 
         let args = e.render_args().expect("render args");
         let draw_state = DrawState::default().scissor([0, 0, args.draw_size[0], args.draw_size[1]]);
