@@ -72,7 +72,7 @@ type R<T> = std::result::Result<T, E>;
 
 #[derive(Debug, Default)]
 struct View {
-    num_tiles: usize,
+    num_images: usize,
 
     // Window dimensions.
     w: f64,
@@ -98,9 +98,9 @@ struct View {
 }
 
 impl View {
-    fn new(num_tiles: usize) -> Self {
+    fn new(num_images: usize) -> Self {
         Self {
-            num_tiles,
+            num_images,
             w: 800.0,
             h: 600.0,
             lw: 1,
@@ -120,11 +120,11 @@ impl View {
         self.x = 0.0;
         self.y = 0.0;
 
-        let pixels_per_image = (self.w * self.h) / self.num_tiles as f64;
+        let pixels_per_image = (self.w * self.h) / self.num_images as f64;
         self.zoom = pixels_per_image.sqrt().floor();
 
         self.lw = std::cmp::max(1, (self.w / self.zoom).floor() as i64);
-        self.lh = (self.num_tiles as f64 / self.lw as f64).ceil() as i64;
+        self.lh = (self.num_images as f64 / self.lw as f64).ceil() as i64;
 
         // Numer of rows takes the overflow, rescale to ensure the grid fits the window.
         let gh = self.lh as f64 * self.zoom;
@@ -142,10 +142,10 @@ impl View {
         self.y = (self.h - gh) / 2.0;
     }
 
-    fn resize(&mut self, w: f64, h: f64, num_tiles: usize) {
+    fn resize(&mut self, w: f64, h: f64, num_images: usize) {
         self.w = w;
         self.h = h;
-        self.num_tiles = num_tiles;
+        self.num_images = num_images;
         if self.auto {
             self.reset();
         }
