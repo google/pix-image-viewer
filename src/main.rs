@@ -394,17 +394,16 @@ impl Draw for Thumb {
     ) -> bool {
         let img = image::Image::new();
 
-        let max_dimension = self.max_dimension();
+        let max_dimension = self.max_dimension() as f64;
 
-        let zoom = zoom / (max_dimension as f64);
-        let trans = trans.zoom(zoom);
+        let trans = trans.zoom(zoom / max_dimension);
 
-        let [w, h] = self.img_size;
-
-        let (x_offset, y_offset) = (
-            (max_dimension - w) as f64 / 2.,
-            (max_dimension - h) as f64 / 2.,
-        );
+        // Center the image within the grid square.
+        let [x_offset, y_offset] = {
+            let img_size = vec2_f64(self.img_size);
+            let gaps = vec2_sub([max_dimension, max_dimension], img_size);
+            vec2_scale(gaps, 0.5)
+        };
 
         let tile_spec = self.tile_spec();
 
