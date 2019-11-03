@@ -530,11 +530,23 @@ trait Draw {
     ) -> bool;
 }
 
+#[derive(Debug)]
+enum MetadataState {
+    Missing,
+    Some(Metadata),
+    Errored,
+}
+
+impl std::default::Default for MetadataState {
+    fn default() -> Self {
+        MetadataState::Missing
+    }
+}
+
 #[derive(Default)]
 struct Image {
     file: Arc<File>,
-    metadata: Option<R<Metadata>>,
-
+    metadata: MetadataState,
     size: Option<usize>,
 }
 
@@ -542,7 +554,10 @@ impl Image {
     fn from(file: Arc<File>, metadata: Option<Metadata>) -> Self {
         Image {
             file,
-            metadata: metadata.map(Ok),
+            metadata: match metadata {
+                Some(metadata) => MetadataState::Some(metadata),
+                None => MetadataState::Missing,
+            },
             ..Default::default()
         }
     }
@@ -558,7 +573,10 @@ impl Draw for Image {
         g: &mut G2d,
     ) -> bool {
         if let Some(n) = self.size {
-            let metadata = self.metadata.as_ref().unwrap().as_ref().unwrap();
+            let metadata = match &self.metadata {
+                MetadataState::Some(metadata) => metadata,
+                _ => unreachable!(),
+            };
             let thumb = &metadata.thumbs[n];
             thumb.draw(trans, zoom, tiles, draw_state, g);
             true
@@ -733,13 +751,13 @@ impl App {
                 let image = &self.images[i];
 
                 let metadata = match &image.metadata {
-                    Some(Ok(metadata)) => metadata,
-                    Some(_) => continue,
-                    None => {
-                        // No metadata found, thus no thumbnails to load. Move it into the thumb
-                        // queue to be thumbnailed.
+                    MetadataState::Missing => {
                         self.thumb_todo[p].push_back(i);
                         continue;
+                    },
+                    MetadataState::Some(metadata) => metadata,
+                    MetadataState::Errored => {
+                        unreachable!();
                     }
                 };
 
@@ -841,11 +859,11 @@ impl App {
                         Ok(metadata) => {
                             // re-trigger cache lookup
                             self.enqueue(i);
-                            Some(Ok(metadata))
+                            MetadataState::Some(metadata)
                         }
                         Err(e) => {
                             error!("make_thumb: {}", e);
-                            Some(Err(e))
+                            MetadataState::Errored
                         }
                     };
 
@@ -875,8 +893,10 @@ impl App {
                 let i = self.thumb_todo[p].pop_front().unwrap();
 
                 let image = &self.images[i];
-                if image.metadata.is_some() {
-                    continue;
+
+                match image.metadata {
+                    MetadataState::Missing => {}
+                    _ => continue,
                 }
 
                 // Already fetching.
@@ -939,7 +959,7 @@ impl App {
             .iter()
             .enumerate()
             .filter_map(|(i, image)| match image.metadata {
-                Some(Err(_)) => None,
+                MetadataState::Errored => None,
                 _ => Some(i),
             })
             .collect();
