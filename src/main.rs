@@ -46,7 +46,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ops::Bound::*;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, Duration};
+use std::time::{Duration, Instant, SystemTime};
 use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2};
 
 #[derive(Debug, Fail)]
@@ -754,7 +754,7 @@ impl App {
                     MetadataState::Missing => {
                         self.thumb_todo[p].push_back(i);
                         continue;
-                    },
+                    }
                     MetadataState::Some(metadata) => metadata,
                     MetadataState::Errored => {
                         unreachable!();
@@ -885,12 +885,10 @@ impl App {
         let _s = ScopedDuration::new("make_thumbs");
 
         for p in 0..self.thumb_todo.len() {
-            for _ in 0..self.thumb_todo[p].len() {
+            while let Some(i) = self.thumb_todo[p].pop_front() {
                 if self.thumb_handles.len() > self.thumb_threads {
                     return;
                 }
-
-                let i = self.thumb_todo[p].pop_front().unwrap();
 
                 let image = &self.images[i];
 
@@ -899,7 +897,6 @@ impl App {
                     _ => continue,
                 }
 
-                // Already fetching.
                 if self.thumb_handles.contains_key(&i) {
                     continue;
                 }
