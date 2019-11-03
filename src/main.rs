@@ -371,22 +371,14 @@ impl Thumb {
     }
 
     fn tile_spec(&self) -> TileSpec {
-        let [w, h] = self.img_size;
-        let (w, h) = (w as f64, h as f64);
-
-        let tile_w = w.log(8.) * 128.;
-        let tile_h = h.log(8.) * 128.;
-
-        let grid_w = (w / tile_w).ceil();
-        let grid_h = (h / tile_h).ceil();
-
-        let tile_w = (w / grid_w).ceil();
-        let tile_h = (h / grid_h).ceil();
-
+        let img_size = vec2_f64(self.img_size);
+        let tile_size = vec2_scale(vec2_log(img_size, 8.0), 128.0);
+        let grid_size = vec2_ceil(vec2_div(img_size, tile_size));
+        let tile_size = vec2_ceil(vec2_div(img_size, grid_size));
         TileSpec {
             img_size: self.img_size,
-            grid_size: [grid_w as u32, grid_h as u32],
-            tile_size: [tile_w as u32, tile_h as u32],
+            grid_size: vec2_u32(grid_size),
+            tile_size: vec2_u32(tile_size),
         }
     }
 }
@@ -621,6 +613,26 @@ where
     T: Copy + std::ops::Div<T, Output = T>,
 {
     [a[0] / b[0], a[1] / b[1]]
+}
+
+#[inline(always)]
+fn vec2_u32(a: Vector2<f64>) -> Vector2<u32> {
+    [a[0] as u32, a[1] as u32]
+}
+
+#[inline(always)]
+fn vec2_f64(a: Vector2<u32>) -> Vector2<f64> {
+    [a[0] as f64, a[1] as f64]
+}
+
+#[inline(always)]
+fn vec2_ceil(a: Vector2<f64>) -> Vector2<f64> {
+    [a[0].ceil(), a[1].ceil()]
+}
+
+#[inline(always)]
+fn vec2_log(a: Vector2<f64>, base: f64) -> Vector2<f64> {
+    [a[0].log(base), a[1].log(base)]
 }
 
 impl App {
