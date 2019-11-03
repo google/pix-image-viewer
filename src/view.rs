@@ -75,19 +75,19 @@ impl View {
         };
     }
 
-    pub fn resize(&mut self, win_size: Vector2<f64>) {
+    pub fn resize_to(&mut self, win_size: Vector2<f64>) {
         self.win_size = win_size;
         if self.auto {
             self.reset();
         }
     }
 
-    pub fn trans(&mut self, trans: Vector2<f64>) {
+    pub fn trans_by(&mut self, trans: Vector2<f64>) {
         self.auto = false;
         self.trans = vec2_add(self.trans, trans);
     }
 
-    pub fn zoom(&mut self, ratio: f64) {
+    pub fn zoom_by(&mut self, ratio: f64) {
         self.auto = false;
 
         let zoom = self.zoom;
@@ -129,27 +129,61 @@ impl View {
     }
 }
 
-#[test]
-fn view_vis_test() {
-    let view = View {
-        win_size: [200.0, 100.0],
-        grid_size: [20.0, 10.0],
-        zoom: 10.0,
-        ..Default::default()
-    };
+#[cfg(test)]
+mod tests {
+    use super::View;
 
-    assert_eq!(view.coords(0), [0.0, 0.0]);
-    assert_eq!(view.coords(1), [10.0, 0.0]);
-    assert_eq!(view.coords(20), [0.0, 10.0]);
+    #[test]
+    fn coords() {
+        let view = View {
+            win_size: [200.0, 100.0],
+            grid_size: [20.0, 10.0],
+            zoom: 10.0,
+            ..Default::default()
+        };
 
-    assert_eq!(view.visible_ratio([0.0, 0.0]), 0.95);
-    assert_eq!(view.visible_ratio([190.0, 0.0]), 0.95);
-    assert_eq!(view.visible_ratio([190.0, 90.0]), 0.95);
-    assert_eq!(view.visible_ratio([0.0, 90.0]), 0.95);
+        assert_eq!(view.coords(0), [0.0, 0.0]);
+        assert_eq!(view.coords(1), [10.0, 0.0]);
+        assert_eq!(view.coords(20), [0.0, 10.0]);
+    }
 
-    assert_eq!(view.visible_ratio([-20.0, 0.0]), 1.05);
-    assert_eq!(view.visible_ratio([210.0, 0.0]), 1.05);
+    #[test]
+    fn is_visible() {
+        let view = View {
+            win_size: [200.0, 100.0],
+            grid_size: [20.0, 10.0],
+            zoom: 10.0,
+            ..Default::default()
+        };
 
-    assert_eq!(view.visible_ratio([0.0, -20.0]), 1.1);
-    assert_eq!(view.visible_ratio([0.0, 110.0]), 1.1);
+        assert!(view.is_visible([0.0, 0.0]));
+        assert!(view.is_visible([190.0, 0.0]));
+        assert!(view.is_visible([0.0, 90.0]));
+
+        assert!(!view.is_visible([-20.0, 0.0]));
+        assert!(!view.is_visible([210.0, 0.0]));
+
+        assert!(!view.is_visible([0.0, -20.0]));
+        assert!(!view.is_visible([0.0, 110.0]));
+    }
+
+    #[test]
+    fn visible_ratio() {
+        let view = View {
+            win_size: [200.0, 100.0],
+            grid_size: [20.0, 10.0],
+            zoom: 10.0,
+            ..Default::default()
+        };
+
+        assert_eq!(view.visible_ratio([0.0, 0.0]), 0.95);
+        assert_eq!(view.visible_ratio([190.0, 0.0]), 0.95);
+        assert_eq!(view.visible_ratio([0.0, 90.0]), 0.95);
+
+        assert_eq!(view.visible_ratio([-20.0, 0.0]), 1.05);
+        assert_eq!(view.visible_ratio([210.0, 0.0]), 1.05);
+
+        assert_eq!(view.visible_ratio([0.0, -20.0]), 1.1);
+        assert_eq!(view.visible_ratio([0.0, 110.0]), 1.1);
+    }
 }

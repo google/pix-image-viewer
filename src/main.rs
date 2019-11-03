@@ -785,7 +785,7 @@ impl App {
     }
 
     fn resize(&mut self, win_size: Vector2<f64>) {
-        self.view.resize(win_size);
+        self.view.resize_to(win_size);
         self.should_recalc = Some(());
     }
 
@@ -878,12 +878,12 @@ impl App {
     }
 
     fn trans(&mut self, trans: Vector2<f64>) {
-        self.view.trans(trans);
+        self.view.trans_by(trans);
         self.should_recalc = Some(());
     }
 
     fn zoom(&mut self, ratio: f64) {
-        self.view.zoom(ratio);
+        self.view.zoom_by(ratio);
         self.should_recalc = Some(());
     }
 
