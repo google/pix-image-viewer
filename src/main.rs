@@ -785,10 +785,10 @@ impl App {
             self.focus = Some(vec2_add(self.view.coords(0), self.view.mouse()));
         }
 
-        self.load_cache(&stopwatch);
-
         self.recv_thumbs();
         self.make_thumbs();
+
+        self.load_cache(&stopwatch);
     }
 
     fn resize(&mut self, win_size: Vector2<f64>) {
