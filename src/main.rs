@@ -811,15 +811,13 @@ impl App {
             .filter_map(|(i, image)| if image.loadable() { Some(i) } else { None })
             .collect();
 
-        let v = &self.view;
-        mouse_distance.sort_by_key(|&i| vec2_square_len(v.mouse_dist(i)) as isize);
+        mouse_distance.sort_by_key(|&i| vec2_square_len(self.view.mouse_dist(i)) as isize);
 
-        let (hi, lo): (Vec<usize>, Vec<usize>) = mouse_distance
-            .into_iter()
-            .partition(|&i| v.is_visible(v.coords(i)));
-
-        self.cache_todo[0].extend(hi.iter());
-        self.cache_todo[1].extend(lo.iter());
+        for i in mouse_distance {
+            let is_visible = self.view.is_visible(self.view.coords(i));
+            let p = (!is_visible) as usize;
+            self.cache_todo[p].push_back(i);
+        }
     }
 
     fn mouse_cursor(&mut self, x: f64, y: f64) {
