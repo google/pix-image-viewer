@@ -699,6 +699,44 @@ impl App {
         }
     }
 
+    fn make_thumb(&mut self, i: usize) {
+        let image = &self.images[i];
+
+        match image.metadata {
+            MetadataState::Missing => {}
+            _ => return,
+        }
+
+        if self.thumb_handles.contains_key(&i) {
+            return;
+        }
+
+        let tile_id_index = self.base_id + i as u64;
+        let file = Arc::clone(&image.file);
+        let db = Arc::clone(&self.db);
+
+        let fut = async move { make_thumb(db, file, tile_id_index) };
+
+        let handle = self.thumb_executor.spawn_with_handle(fut).unwrap().fuse();
+
+        self.thumb_handles.insert(i, handle);
+    }
+
+    fn make_thumbs(&mut self) {
+        let _s = ScopedDuration::new("make_thumbs");
+
+        for p in 0..self.thumb_todo.len() {
+            while let Some(i) = {
+                if self.thumb_handles.len() > self.thumb_threads {
+                    return;
+                }
+                self.thumb_todo[p].pop_front()
+            } {
+                self.make_thumb(i);
+            }
+        }
+    }
+
     fn recv_thumbs(&mut self) {
         let _s = ScopedDuration::new("recv_thumbs");
 
@@ -733,40 +771,6 @@ impl App {
         }
 
         std::mem::swap(&mut handles, &mut self.thumb_handles);
-    }
-
-    fn make_thumbs(&mut self) {
-        let _s = ScopedDuration::new("make_thumbs");
-
-        for p in 0..self.thumb_todo.len() {
-            while let Some(i) = {
-                if self.thumb_handles.len() > self.thumb_threads {
-                    return;
-                }
-                self.thumb_todo[p].pop_front()
-            } {
-                let image = &self.images[i];
-
-                match image.metadata {
-                    MetadataState::Missing => {}
-                    _ => continue,
-                }
-
-                if self.thumb_handles.contains_key(&i) {
-                    continue;
-                }
-
-                let tile_id_index = self.base_id + i as u64;
-                let file = Arc::clone(&image.file);
-                let db = Arc::clone(&self.db);
-
-                let fut = async move { make_thumb(db, file, tile_id_index) };
-
-                let handle = self.thumb_executor.spawn_with_handle(fut).unwrap().fuse();
-
-                self.thumb_handles.insert(i, handle);
-            }
-        }
     }
 
     fn update(&mut self, args: UpdateArgs) {
@@ -818,8 +822,7 @@ impl App {
     }
 
     fn pri(&self, i: usize) -> usize {
-        let is_visible = self.view.is_visible(self.view.coords(i));
-        (!is_visible) as usize
+        !self.view.is_visible(self.view.coords(i)) as usize
     }
 
     fn mouse_cursor(&mut self, x: f64, y: f64) {
