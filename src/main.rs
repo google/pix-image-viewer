@@ -410,6 +410,13 @@ impl Image {
             ..Default::default()
         }
     }
+
+    fn loadable(&self) -> bool {
+        match self.metadata {
+            MetadataState::Errored => false,
+            _ => true,
+        }
+    }
 }
 
 impl Draw for Image {
@@ -801,10 +808,7 @@ impl App {
             .images
             .iter()
             .enumerate()
-            .filter_map(|(i, image)| match image.metadata {
-                MetadataState::Errored => None,
-                _ => Some(i),
-            })
+            .filter_map(|(i, image)| if image.loadable() { Some(i) } else { None })
             .collect();
 
         let v = &self.view;
