@@ -1,5 +1,5 @@
 use crate::vec2_div;
-use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_square_len, vec2_sub, Vector2};
+use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2};
 
 #[derive(Debug, Default)]
 pub struct View {

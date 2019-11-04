@@ -17,7 +17,6 @@
 #![feature(vec_remove_item)]
 #![feature(drain_filter)]
 #![feature(stmt_expr_attributes)]
-#![allow(unused_imports)]
 
 #[macro_use]
 extern crate log;
@@ -44,11 +43,9 @@ use futures::select;
 use futures::task::SpawnExt;
 use piston_window::*;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
-use std::ops::Bound::*;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
-use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_square_len, vec2_sub, Vector2};
+use vecmath::{vec2_add, vec2_scale, vec2_square_len, vec2_sub, Vector2};
 
 #[derive(Debug, Fail)]
 pub enum E {
@@ -79,6 +76,7 @@ impl Pow2 {
         Pow2((32 - i.leading_zeros() - 1) as u8)
     }
 
+    #[allow(unused)]
     fn u32(&self) -> u32 {
         1 << self.0
     }
@@ -431,7 +429,7 @@ impl Draw for Image {
         if let Some(n) = self.size {
             let metadata = match &self.metadata {
                 MetadataState::Some(metadata) => metadata,
-                _ => unreachable!(),
+                _ => unreachable!("image draw unreachable"),
             };
             let thumb = &metadata.thumbs[n];
             thumb.draw(trans, zoom, tiles, draw_state, g);
@@ -504,6 +502,24 @@ fn vec2_ceil(a: Vector2<f64>) -> Vector2<f64> {
 #[inline(always)]
 fn vec2_log(a: Vector2<f64>, base: f64) -> Vector2<f64> {
     [a[0].log(base), a[1].log(base)]
+}
+
+struct Stopwatch {
+    start: std::time::Instant,
+    duration: std::time::Duration,
+}
+
+impl Stopwatch {
+    fn from_millis(millis: u64) -> Self {
+        Self {
+            start: std::time::Instant::now(),
+            duration: std::time::Duration::from_millis(millis),
+        }
+    }
+
+    fn done(&self) -> bool {
+        self.start.elapsed() >= self.duration
+    }
 }
 
 impl App {
@@ -590,14 +606,12 @@ impl App {
         ((self.view.zoom * UPSIZE_FACTOR) as u32).next_power_of_two()
     }
 
-    fn load_tile_from_db(&mut self, now: &SystemTime) -> bool {
+    fn load_cache(&mut self, stopwatch: &Stopwatch) {
         let _s = ScopedDuration::new("load_tile_from_db");
 
         let target_size = self.target_size();
 
         let texture_settings = TextureSettings::new();
-
-        let time_budget = Duration::from_millis(10);
 
         // visible first
         for p in 0..self.cache_todo.len() {
@@ -610,9 +624,7 @@ impl App {
                         continue;
                     }
                     MetadataState::Some(metadata) => metadata,
-                    MetadataState::Errored => {
-                        unreachable!();
-                    }
+                    MetadataState::Errored => continue,
                 };
 
                 let shift = if p == 0 {
@@ -643,6 +655,11 @@ impl App {
                         continue;
                     }
 
+                    if stopwatch.done() {
+                        self.cache_todo[p].push_front(i);
+                        return;
+                    }
+
                     // load the tile from the cache
                     let _s3 = ScopedDuration::new("load_tile");
 
@@ -663,12 +680,6 @@ impl App {
                     .expect("texture");
 
                     self.tiles.insert(*tile_ref, image);
-
-                    if now.elapsed().unwrap() > time_budget {
-                        // Resume processing this image on the next call.
-                        self.cache_todo[p].push_front(i);
-                        return true;
-                    }
                 }
 
                 // Unload old tiles.
@@ -686,8 +697,6 @@ impl App {
                 self.cache_todo[p].push_back(i);
             }
         }
-
-        false
     }
 
     fn recv_thumbs(&mut self) {
@@ -761,20 +770,18 @@ impl App {
     }
 
     fn update(&mut self, args: UpdateArgs) {
-        let now = SystemTime::now();
+        let stopwatch = Stopwatch::from_millis(10);
 
         if let Some(z) = self.zooming {
-            self.zoom(1.0 + (z * args.dt));
-            return;
+            self.zoom(z.mul_add(args.dt, 1.0));
         }
 
         if self.focus.is_none() {
             self.recalc_visible();
             self.focus = Some(vec2_add(self.view.coords(0), self.view.mouse()));
-            return;
         }
 
-        self.load_tile_from_db(&now);
+        self.load_cache(&stopwatch);
 
         self.recv_thumbs();
         self.make_thumbs();
@@ -1098,7 +1105,7 @@ fn find_images(dirs: Vec<String>) -> Vec<Arc<File>> {
             let modified: u64 = metadata
                 .modified()
                 .expect("metadata modified")
-                .duration_since(SystemTime::UNIX_EPOCH)
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .expect("duration since unix epoch")
                 .as_secs();
 
