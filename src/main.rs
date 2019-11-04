@@ -597,6 +597,8 @@ impl App {
 
         let texture_settings = TextureSettings::new();
 
+        let time_budget = Duration::from_millis(10);
+
         // visible first
         for p in 0..self.cache_todo.len() {
             while let Some(i) = self.cache_todo[p].pop_front() {
@@ -613,19 +615,19 @@ impl App {
                     }
                 };
 
-                // If visible
-                let n = if p == 0 {
-                    metadata.nearest(target_size)
+                let shift = if p == 0 {
+                    0
                 } else {
                     let ratio = self.view.visible_ratio(self.view.coords(i));
-                    let shift = f64::max(0.0, ratio - 1.0).floor() as usize;
-                    metadata.nearest(target_size >> shift)
+                    f64::max(0.0, ratio - 1.0).floor() as usize
                 };
+
+                let new_size = metadata.nearest(target_size >> shift);
 
                 let current_size = image.size.unwrap_or(0);
 
                 // Progressive resizing.
-                let n = match n.cmp(&current_size) {
+                let new_size = match new_size.cmp(&current_size) {
                     Ordering::Less => current_size - 1,
                     Ordering::Equal => {
                         // Already loaded target size.
@@ -635,7 +637,7 @@ impl App {
                 };
 
                 // Load new tiles.
-                for tile_ref in &metadata.thumbs[n].tile_refs {
+                for tile_ref in &metadata.thumbs[new_size].tile_refs {
                     // Already loaded.
                     if self.tiles.contains_key(tile_ref) {
                         continue;
@@ -662,9 +664,7 @@ impl App {
 
                     self.tiles.insert(*tile_ref, image);
 
-                    // Check if we've exhausted our time budget (we are in the main
-                    // thread).
-                    if now.elapsed().unwrap() > Duration::from_millis(10) {
+                    if now.elapsed().unwrap() > time_budget {
                         // Resume processing this image on the next call.
                         self.cache_todo[p].push_front(i);
                         return true;
@@ -673,7 +673,7 @@ impl App {
 
                 // Unload old tiles.
                 for (j, thumb) in metadata.thumbs.iter().enumerate() {
-                    if j == n {
+                    if j == new_size {
                         continue;
                     }
                     for tile_ref in &thumb.tile_refs {
@@ -681,19 +681,13 @@ impl App {
                     }
                 }
 
-                self.images[i].size = Some(n);
+                self.images[i].size = Some(new_size);
 
                 self.cache_todo[p].push_back(i);
             }
         }
 
         false
-    }
-
-    fn enqueue(&mut self, i: usize) {
-        let is_visible = self.view.is_visible(self.view.coords(i));
-        let p = (!is_visible) as usize;
-        self.cache_todo[p].push_front(i);
     }
 
     fn recv_thumbs(&mut self) {
@@ -709,8 +703,7 @@ impl App {
                 thumb_res = handle => {
                     self.images[i].metadata = match thumb_res {
                         Ok(metadata) => {
-                            // re-trigger cache lookup
-                            self.enqueue(i);
+                            self.cache_todo[self.pri(i)].push_front(i);
                             MetadataState::Some(metadata)
                         }
                         Err(e) => {
@@ -737,11 +730,12 @@ impl App {
         let _s = ScopedDuration::new("make_thumbs");
 
         for p in 0..self.thumb_todo.len() {
-            while let Some(i) = self.thumb_todo[p].pop_front() {
+            while let Some(i) = {
                 if self.thumb_handles.len() > self.thumb_threads {
                     return;
                 }
-
+                self.thumb_todo[p].pop_front()
+            } {
                 let image = &self.images[i];
 
                 match image.metadata {
@@ -780,9 +774,7 @@ impl App {
             return;
         }
 
-        if self.load_tile_from_db(&now) {
-            return;
-        }
+        self.load_tile_from_db(&now);
 
         self.recv_thumbs();
         self.make_thumbs();
@@ -814,10 +806,13 @@ impl App {
         mouse_distance.sort_by_key(|&i| vec2_square_len(self.view.mouse_dist(i)) as isize);
 
         for i in mouse_distance {
-            let is_visible = self.view.is_visible(self.view.coords(i));
-            let p = (!is_visible) as usize;
-            self.cache_todo[p].push_back(i);
+            self.cache_todo[self.pri(i)].push_back(i);
         }
+    }
+
+    fn pri(&self, i: usize) -> usize {
+        let is_visible = self.view.is_visible(self.view.coords(i));
+        (!is_visible) as usize
     }
 
     fn mouse_cursor(&mut self, x: f64, y: f64) {
