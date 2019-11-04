@@ -48,7 +48,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ops::Bound::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2, vec2_square_len};
+use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_square_len, vec2_sub, Vector2};
 
 #[derive(Debug, Fail)]
 pub enum E {
@@ -808,7 +808,7 @@ impl App {
             .collect();
 
         let v = &self.view;
-        mouse_distance.sort_by_key(|&i| v.mouse_dist(i) as isize);
+        mouse_distance.sort_by_key(|&i| vec2_square_len(v.mouse_dist(i)) as isize);
 
         let (hi, lo): (Vec<usize>, Vec<usize>) = mouse_distance
             .into_iter()
@@ -829,16 +829,11 @@ impl App {
 
     fn maybe_refocus(&mut self) {
         if let Some(old) = self.focus {
-            // TODO: use mouse_dist
-            let new = vec2_add(self.view.coords(0), self.view.mouse());
+            let new = self.view.mouse_dist(0);
             let delta = vec2_sub(new, old);
             if vec2_square_len(delta) > 500.0 {
                 self.force_refocus();
-                println!("refocus");
-            } else {
-                println!("skip");
             }
-
         }
     }
 

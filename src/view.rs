@@ -1,5 +1,5 @@
 use crate::vec2_div;
-use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2, vec2_square_len};
+use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_square_len, vec2_sub, Vector2};
 
 #[derive(Debug, Default)]
 pub struct View {
@@ -121,11 +121,10 @@ impl View {
         vec2_add(self.trans, vec2_scale(coords, self.zoom))
     }
 
-    pub fn mouse_dist(&self, i: usize) -> f64 {
+    pub fn mouse_dist(&self, i: usize) -> Vector2<f64> {
         let mid = self.zoom / 2.0;
         let coords = vec2_add(self.coords(i), [mid, mid]);
-        let delta = vec2_sub(coords, self.mouse);
-        vec2_square_len(delta)
+        vec2_sub(coords, self.mouse)
     }
 
     pub fn is_visible(&self, min: Vector2<f64>) -> bool {
