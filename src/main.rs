@@ -48,7 +48,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ops::Bound::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2};
+use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2, vec2_square_len};
 
 #[derive(Debug, Fail)]
 pub enum E {
@@ -442,9 +442,6 @@ struct App {
 
     images: Vec<Image>,
 
-    // Files ordered by distance from the mouse.
-    mouse_order_xy: (f64, f64),
-
     // Graphics state
     new_window_settings: Option<WindowSettings>,
     window_settings: WindowSettings,
@@ -459,6 +456,9 @@ struct App {
     zooming: Option<f64>,
     cursor_captured: bool,
 
+    // Mouse distance calculations are relative to this point.
+    focus: Option<Vector2<f64>>,
+
     cache_todo: [VecDeque<usize>; 2],
 
     thumb_todo: [VecDeque<usize>; 2],
@@ -467,8 +467,6 @@ struct App {
     thumb_threads: usize,
 
     shift_held: bool,
-
-    should_recalc: Option<()>,
 
     base_id: u64,
 }
@@ -522,8 +520,6 @@ impl App {
         Self {
             db,
 
-            mouse_order_xy: (0.0, 0.0),
-
             new_window_settings: None,
             window_settings,
             window,
@@ -556,7 +552,7 @@ impl App {
 
             shift_held: false,
 
-            should_recalc: Some(()),
+            focus: None,
 
             base_id,
 
@@ -575,7 +571,7 @@ impl App {
             self.window = new.build().expect("window build");
             self.tiles.clear();
 
-            self.should_recalc = Some(());
+            self.focus.take();
 
             self.panning = false;
             self.cursor_captured = false;
@@ -771,8 +767,9 @@ impl App {
             return;
         }
 
-        if let Some(()) = self.should_recalc.take() {
+        if self.focus.is_none() {
             self.recalc_visible();
+            self.focus = Some(vec2_add(self.view.coords(0), self.view.mouse()));
             return;
         }
 
@@ -786,7 +783,7 @@ impl App {
 
     fn resize(&mut self, win_size: Vector2<f64>) {
         self.view.resize_to(win_size);
-        self.should_recalc = Some(());
+        self.focus = None;
     }
 
     fn recalc_visible(&mut self) {
@@ -811,11 +808,7 @@ impl App {
             .collect();
 
         let v = &self.view;
-        mouse_distance.sort_by_key(|&i| {
-            let coords = v.coords(i);
-            let [dx, dy] = vec2_sub(coords, v.mouse);
-            ((dx * dx) + (dy * dy)) as usize
-        });
+        mouse_distance.sort_by_key(|&i| v.mouse_dist(i) as isize);
 
         let (hi, lo): (Vec<usize>, Vec<usize>) = mouse_distance
             .into_iter()
@@ -826,15 +819,26 @@ impl App {
     }
 
     fn mouse_cursor(&mut self, x: f64, y: f64) {
-        self.view.mouse = [x, y];
+        self.view.mouse_to([x, y]);
+        self.maybe_refocus();
+    }
 
-        let (ox, oy) = self.mouse_order_xy;
-        let dist = ((x - ox) as u64).checked_pow(2).unwrap_or(0)
-            + ((y - oy) as u64).checked_pow(2).unwrap_or(0);
-        let trigger_dist = std::cmp::max(50, self.view.zoom as u64);
-        if dist > trigger_dist {
-            self.should_recalc = Some(());
-            self.mouse_order_xy = (x, y);
+    fn force_refocus(&mut self) {
+        self.focus.take();
+    }
+
+    fn maybe_refocus(&mut self) {
+        if let Some(old) = self.focus {
+            // TODO: use mouse_dist
+            let new = vec2_add(self.view.coords(0), self.view.mouse());
+            let delta = vec2_sub(new, old);
+            if vec2_square_len(delta) > 500.0 {
+                self.force_refocus();
+                println!("refocus");
+            } else {
+                println!("skip");
+            }
+
         }
     }
 
@@ -879,17 +883,17 @@ impl App {
 
     fn trans(&mut self, trans: Vector2<f64>) {
         self.view.trans_by(trans);
-        self.should_recalc = Some(());
+        self.maybe_refocus();
     }
 
     fn zoom(&mut self, ratio: f64) {
         self.view.zoom_by(ratio);
-        self.should_recalc = Some(());
+        self.maybe_refocus();
     }
 
     fn reset(&mut self) {
         self.view.reset();
-        self.should_recalc = Some(());
+        self.force_refocus();
     }
 
     fn button(&mut self, b: ButtonArgs) {

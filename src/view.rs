@@ -1,5 +1,5 @@
 use crate::vec2_div;
-use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2};
+use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2, vec2_square_len};
 
 #[derive(Debug, Default)]
 pub struct View {
@@ -20,7 +20,7 @@ pub struct View {
     min_zoom: f64,
 
     // Mouse coordinates.
-    pub mouse: Vector2<f64>,
+    mouse: Vector2<f64>,
 
     // Has the user panned or zoomed?
     auto: bool,
@@ -82,6 +82,14 @@ impl View {
         }
     }
 
+    pub fn mouse(&self) -> Vector2<f64> {
+        self.mouse
+    }
+
+    pub fn mouse_to(&mut self, mouse: Vector2<f64>) {
+        self.mouse = mouse;
+    }
+
     pub fn trans_by(&mut self, trans: Vector2<f64>) {
         self.auto = false;
         self.trans = vec2_add(self.trans, trans);
@@ -111,6 +119,13 @@ impl View {
         let grid_w = self.grid_size[0] as usize;
         let coords = [(i % grid_w) as f64, (i / grid_w) as f64];
         vec2_add(self.trans, vec2_scale(coords, self.zoom))
+    }
+
+    pub fn mouse_dist(&self, i: usize) -> f64 {
+        let mid = self.zoom / 2.0;
+        let coords = vec2_add(self.coords(i), [mid, mid]);
+        let delta = vec2_sub(coords, self.mouse);
+        vec2_square_len(delta)
     }
 
     pub fn is_visible(&self, min: Vector2<f64>) -> bool {
