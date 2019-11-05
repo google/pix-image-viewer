@@ -844,11 +844,11 @@ impl App {
         }
     }
 
-    fn mouse_scroll(&mut self, _h: f64, v: f64) {
-        for _ in 0..(v as i64) {
+    fn mouse_zoom(&mut self, v: f64) {
+        for _ in 0..(v as isize) {
             self.zoom(1.0 + self.zoom_increment());
         }
-        for _ in (v as i64)..0 {
+        for _ in (v as isize)..0 {
             self.zoom(1.0 - self.zoom_increment());
         }
     }
@@ -1025,9 +1025,9 @@ impl App {
                     self.resize([w as f64, h as f64]);
                 });
 
-                e.mouse_scroll(|hv| {
+                e.mouse_scroll(|[_, v]| {
                     let _s = ScopedDuration::new("mouse_scroll");
-                    self.mouse_scroll(hv[0], hv[1]);
+                    self.mouse_zoom(v);
                 });
 
                 e.mouse_cursor(|xy| {
