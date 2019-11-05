@@ -415,6 +415,10 @@ impl Image {
             _ => true,
         }
     }
+
+    fn reset(&mut self) {
+        self.size = None;
+    }
 }
 
 impl Draw for Image {
@@ -583,23 +587,19 @@ impl App {
         }
     }
 
-    fn rebuild_window(&mut self) {
-        if let Some(new) = self.new_window_settings.take() {
-            // force reload of images
-            for s in &mut self.images {
-                s.size = None;
-            }
-
-            self.window_settings = new.clone();
-            self.window = new.build().expect("window build");
-            self.tiles.clear();
-
-            self.focus.take();
-
-            self.panning = false;
-            self.cursor_captured = false;
-            self.zooming = None;
+    fn rebuild_window(&mut self, settings: WindowSettings) {
+        for image in &mut self.images {
+            image.reset();
         }
+
+        self.window_settings = settings.clone();
+        self.window = settings.build().expect("window build");
+
+        self.tiles.clear();
+        self.focus = None;
+        self.panning = false;
+        self.cursor_captured = false;
+        self.zooming = None;
     }
 
     fn target_size(&self) -> u32 {
@@ -774,6 +774,7 @@ impl App {
     }
 
     fn update(&mut self, args: UpdateArgs) {
+        let _s = ScopedDuration::new("update");
         let stopwatch = Stopwatch::from_millis(10);
 
         if let Some(z) = self.zooming {
@@ -791,7 +792,8 @@ impl App {
         self.load_cache(&stopwatch);
     }
 
-    fn resize(&mut self, win_size: Vector2<f64>) {
+    fn resize(&mut self, win_size: Vector2<u32>) {
+        let _s = ScopedDuration::new("resize");
         self.view.resize_to(win_size);
         self.focus = None;
     }
@@ -825,13 +827,13 @@ impl App {
         !self.view.is_visible(self.view.coords(i)) as usize
     }
 
-    fn mouse_cursor(&mut self, x: f64, y: f64) {
-        self.view.mouse_to([x, y]);
+    fn mouse_move(&mut self, loc: Vector2<f64>) {
+        self.view.mouse_to(loc);
         self.maybe_refocus();
     }
 
     fn force_refocus(&mut self) {
-        self.focus.take();
+        self.focus = None;
     }
 
     fn maybe_refocus(&mut self) {
@@ -845,6 +847,7 @@ impl App {
     }
 
     fn mouse_zoom(&mut self, v: f64) {
+        let _s = ScopedDuration::new("mouse_zoom");
         for _ in 0..(v as isize) {
             self.zoom(1.0 + self.zoom_increment());
         }
@@ -853,8 +856,9 @@ impl App {
         }
     }
 
-    fn mouse_relative(&mut self, delta: Vector2<f64>) {
+    fn mouse_pan(&mut self, delta: Vector2<f64>) {
         if self.panning {
+            let _s = ScopedDuration::new("mouse_pan");
             if self.cursor_captured {
                 self.view.center_mouse();
             }
@@ -899,6 +903,7 @@ impl App {
     }
 
     fn button(&mut self, b: ButtonArgs) {
+        let _s = ScopedDuration::new("button");
         match (b.state, b.button) {
             (ButtonState::Press, Button::Keyboard(Key::Z)) => {
                 self.reset();
@@ -1009,39 +1014,34 @@ impl App {
         loop {
             let _s = ScopedDuration::new("run_loop");
 
-            self.rebuild_window();
+            if let Some(settings) = self.new_window_settings.take() {
+                self.rebuild_window(settings);
+            }
 
             if let Some(e) = self.window.next() {
                 let _s = ScopedDuration::new("run_loop_next");
 
                 e.update(|args| {
-                    let _s = ScopedDuration::new("update");
                     self.update(*args);
                 });
 
                 e.resize(|args| {
-                    let _s = ScopedDuration::new("resize");
-                    let [w, h] = args.draw_size;
-                    self.resize([w as f64, h as f64]);
+                    self.resize(args.draw_size);
                 });
 
                 e.mouse_scroll(|[_, v]| {
-                    let _s = ScopedDuration::new("mouse_scroll");
                     self.mouse_zoom(v);
                 });
 
-                e.mouse_cursor(|xy| {
-                    let _s = ScopedDuration::new("mouse_cursor");
-                    self.mouse_cursor(xy[0], xy[1]);
+                e.mouse_cursor(|loc| {
+                    self.mouse_move(loc);
                 });
 
                 e.mouse_relative(|delta| {
-                    let _s = ScopedDuration::new("mouse_relative");
-                    self.mouse_relative(delta);
+                    self.mouse_pan(delta);
                 });
 
                 e.button(|b| {
-                    let _s = ScopedDuration::new("button");
                     self.button(b)
                 });
 

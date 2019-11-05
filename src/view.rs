@@ -1,4 +1,4 @@
-use crate::vec2_div;
+use crate::{vec2_div, vec2_f64};
 use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_sub, Vector2};
 
 #[derive(Debug, Default)]
@@ -75,8 +75,8 @@ impl View {
         };
     }
 
-    pub fn resize_to(&mut self, win_size: Vector2<f64>) {
-        self.win_size = win_size;
+    pub fn resize_to(&mut self, win_size: Vector2<u32>) {
+        self.win_size = vec2_f64(win_size);
         if self.auto {
             self.reset();
         }
