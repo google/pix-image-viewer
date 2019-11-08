@@ -28,14 +28,16 @@ extern crate failure;
 extern crate lazy_static;
 
 mod database;
+mod image;
 mod stats;
+mod vec;
 mod view;
 
-use crate::stats::ScopedDuration;
 use ::image::GenericImage;
 use ::image::GenericImageView;
 use boolinator::Boolinator;
 use clap::Arg;
+use crate::stats::ScopedDuration;
 use futures::future::Fuse;
 use futures::future::FutureExt;
 use futures::future::RemoteHandle;
@@ -45,7 +47,7 @@ use piston_window::*;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
-use vecmath::{vec2_add, vec2_scale, vec2_square_len, vec2_sub, Vector2};
+use vec::*;
 
 #[derive(Debug, Fail)]
 pub enum E {
@@ -239,7 +241,7 @@ impl Draw for Thumb {
         draw_state: &DrawState,
         g: &mut G2d,
     ) -> bool {
-        let img = image::Image::new();
+        let img = piston_window::image::Image::new();
 
         let max_dimension = self.max_dimension() as f64;
 
@@ -378,7 +380,7 @@ trait Draw {
 }
 
 #[derive(Debug)]
-enum MetadataState {
+pub enum MetadataState {
     Missing,
     Some(Metadata),
     Errored,
@@ -390,66 +392,12 @@ impl std::default::Default for MetadataState {
     }
 }
 
-#[derive(Default)]
-struct Image {
-    file: Arc<File>,
-    metadata: MetadataState,
-    size: Option<usize>,
-}
-
-impl Image {
-    fn from(file: Arc<File>, metadata: Option<Metadata>) -> Self {
-        Image {
-            file,
-            metadata: match metadata {
-                Some(metadata) => MetadataState::Some(metadata),
-                None => MetadataState::Missing,
-            },
-            ..Default::default()
-        }
-    }
-
-    fn loadable(&self) -> bool {
-        match self.metadata {
-            MetadataState::Errored => false,
-            _ => true,
-        }
-    }
-
-    fn reset(&mut self) {
-        self.size = None;
-    }
-}
-
-impl Draw for Image {
-    fn draw(
-        &self,
-        trans: [[f64; 3]; 2],
-        zoom: f64,
-        tiles: &BTreeMap<TileRef, G2dTexture>,
-        draw_state: &DrawState,
-        g: &mut G2d,
-    ) -> bool {
-        if let Some(n) = self.size {
-            let metadata = match &self.metadata {
-                MetadataState::Some(metadata) => metadata,
-                _ => unreachable!("image draw unreachable"),
-            };
-            let thumb = &metadata.thumbs[n];
-            thumb.draw(trans, zoom, tiles, draw_state, g);
-            true
-        } else {
-            false
-        }
-    }
-}
-
 type Handle<T> = Fuse<RemoteHandle<T>>;
 
 struct App {
     db: Arc<database::Database>,
 
-    images: Vec<Image>,
+    images: Vec<image::Image>,
 
     // Graphics state
     new_window_settings: Option<WindowSettings>,
@@ -480,34 +428,6 @@ struct App {
     base_id: u64,
 }
 
-#[inline(always)]
-fn vec2_div<T>(a: Vector2<T>, b: Vector2<T>) -> Vector2<T>
-where
-    T: Copy + std::ops::Div<T, Output = T>,
-{
-    [a[0] / b[0], a[1] / b[1]]
-}
-
-#[inline(always)]
-fn vec2_u32(a: Vector2<f64>) -> Vector2<u32> {
-    [a[0] as u32, a[1] as u32]
-}
-
-#[inline(always)]
-fn vec2_f64(a: Vector2<u32>) -> Vector2<f64> {
-    [a[0] as f64, a[1] as f64]
-}
-
-#[inline(always)]
-fn vec2_ceil(a: Vector2<f64>) -> Vector2<f64> {
-    [a[0].ceil(), a[1].ceil()]
-}
-
-#[inline(always)]
-fn vec2_log(a: Vector2<f64>, base: f64) -> Vector2<f64> {
-    [a[0].log(base), a[1].log(base)]
-}
-
 struct Stopwatch {
     start: std::time::Instant,
     duration: std::time::Duration,
@@ -528,7 +448,7 @@ impl Stopwatch {
 
 impl App {
     fn new(
-        images: Vec<Image>,
+        images: Vec<image::Image>,
         db: Arc<database::Database>,
         thumbnailer_threads: usize,
         base_id: u64,
@@ -702,9 +622,8 @@ impl App {
     fn make_thumb(&mut self, i: usize) {
         let image = &self.images[i];
 
-        match image.metadata {
-            MetadataState::Missing => {}
-            _ => return,
+        if !image.is_missing() {
+            return;
         }
 
         if self.thumb_handles.contains_key(&i) {
@@ -975,7 +894,7 @@ impl App {
         g: &mut G2d,
         view: &view::View,
         tiles: &BTreeMap<TileRef, G2dTexture>,
-        images: &[Image],
+        images: &[image::Image],
     ) {
         clear([0.0, 0.0, 0.0, 1.0], g);
 
@@ -1200,7 +1119,7 @@ fn main() {
     let db = database::Database::open(&db_path).expect("db open");
     let base_id = db.reserve(files.len());
 
-    let images: Vec<Image> = files
+    let images: Vec<image::Image> = files
         .into_iter()
         .map(|file| {
             let metadata = match db.get_metadata(&*file) {
@@ -1212,7 +1131,7 @@ fn main() {
                 _ => None,
             };
 
-            Image::from(file, metadata)
+            image::Image::from(file, metadata)
         })
         .collect();
 
