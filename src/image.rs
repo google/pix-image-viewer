@@ -13,29 +13,19 @@ pub struct Image {
 }
 
 impl Image {
-    pub fn from(file: Arc<File>, metadata: Option<Metadata>) -> Self {
+    pub fn from(file: Arc<File>) -> Self {
         Image {
             file,
-            metadata: match metadata {
-                Some(metadata) => MetadataState::Some(metadata),
-                None => MetadataState::Missing,
-            },
             ..Default::default()
         }
     }
 
-    pub fn loadable(&self) -> bool {
-        match self.metadata {
-            MetadataState::Errored => false,
-            _ => true,
-        }
+    pub fn is_loadable(&self) -> bool {
+        self.metadata != MetadataState::Errored
     }
 
     pub fn is_missing(&self) -> bool {
-        match self.metadata {
-            MetadataState::Missing => true,
-            _ => false,
-        }
+        self.metadata == MetadataState::Missing
     }
 
     pub fn reset(&mut self) {

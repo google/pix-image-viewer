@@ -141,13 +141,13 @@ fn tile_ref_test() {
     )
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
 struct Thumb {
     img_size: [u32; 2],
     tile_refs: Vec<TileRef>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Metadata {
     thumbs: Vec<Thumb>,
 }
@@ -269,8 +269,6 @@ impl Draw for Thumb {
     }
 }
 
-static UPS: u64 = 100;
-
 static UPSIZE_FACTOR: f64 = 1.5;
 
 trait Draw {
@@ -284,8 +282,9 @@ trait Draw {
     ) -> bool;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum MetadataState {
+    Unknown,
     Missing,
     Some(Metadata),
     Errored,
@@ -355,11 +354,13 @@ impl Stopwatch {
 
 impl App {
     fn new(
-        images: Vec<image::Image>,
+        files: Vec<Arc<File>>,
         db: Arc<database::Database>,
         thumbnailer_threads: usize,
         base_id: u64,
     ) -> Self {
+        let images: Vec<image::Image> = files.into_iter().map(image::Image::from).collect();
+
         let view = view::View::new(images.len());
 
         let window_settings = WindowSettings::new("pix", [800.0, 600.0])
@@ -367,7 +368,7 @@ impl App {
             .fullscreen(false);
 
         let mut window: PistonWindow = window_settings.build().expect("window build");
-        window.set_ups(UPS);
+        window.set_ups(100);
 
         let texture_context = window.create_texture_context();
 
@@ -443,9 +444,21 @@ impl App {
         // visible first
         for p in 0..self.cache_todo.len() {
             while let Some(i) = self.cache_todo[p].pop_front() {
-                let image = &self.images[i];
+                let image = &mut self.images[i];
+
+                if image.metadata == MetadataState::Unknown {
+                    image.metadata = match self.db.get_metadata(&*image.file) {
+                        Ok(Some(metadata)) => MetadataState::Some(metadata),
+                        Ok(None) => MetadataState::Missing,
+                        Err(e) => {
+                            error!("get metadata error: {:?}", e);
+                            MetadataState::Errored
+                        }
+                    };
+                }
 
                 let metadata = match &image.metadata {
+                    MetadataState::Unknown => unreachable!(),
                     MetadataState::Missing => {
                         self.thumb_todo[p].push_back(i);
                         continue;
@@ -659,7 +672,7 @@ impl App {
             .images
             .iter()
             .enumerate()
-            .filter_map(|(i, image)| if image.loadable() { Some(i) } else { None })
+            .filter_map(|(i, image)| if image.is_loadable() { Some(i) } else { None })
             .collect();
 
         mouse_distance.sort_by_key(|&i| vec2_square_len(self.view.mouse_dist(i)) as isize);
@@ -1042,27 +1055,12 @@ fn main() {
     info!("Found {} images", files.len());
 
     let db = database::Database::open(&db_path).expect("db open");
+
     let base_id = db.reserve(files.len());
-
-    let images: Vec<image::Image> = files
-        .into_iter()
-        .map(|file| {
-            let metadata = match db.get_metadata(&*file) {
-                Ok(Some(metadata)) => Some(metadata),
-                Err(e) => {
-                    error!("get metadata error: {:?}", e);
-                    None
-                }
-                _ => None,
-            };
-
-            image::Image::from(file, metadata)
-        })
-        .collect();
 
     {
         let _s = ScopedDuration::new("uptime");
-        App::new(images, Arc::new(db), thumbnailer_threads, base_id).run();
+        App::new(files, Arc::new(db), thumbnailer_threads, base_id).run();
     }
 
     stats::dump();
