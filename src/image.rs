@@ -45,10 +45,10 @@ impl Image {
     pub fn make_thumb(
         &self,
         tile_id_index: u64,
-        db: Arc<crate::database::Database>,
-    ) -> impl std::future::Future<Output = ThumbRet> {
+    ) -> impl std::future::Future<Output = crate::R<(Arc<File>, Metadata, crate::TileMap<Vec<u8>>)>>
+    {
         let file = Arc::clone(&self.file);
-        async move { make_thumb(db, file, tile_id_index) }
+        async move { make_thumb(file, tile_id_index) }
     }
 }
 
@@ -75,12 +75,15 @@ impl Draw for Image {
     }
 }
 
-pub type ThumbRet = crate::R<Metadata>;
-
 // TODO: make flag
 static MIN_SIZE: u32 = 8;
 
-fn make_thumb(db: Arc<crate::database::Database>, file: Arc<File>, uid: u64) -> ThumbRet {
+pub type ThumbRet = crate::R<Metadata>;
+
+fn make_thumb(
+    file: Arc<File>,
+    uid: u64,
+) -> crate::R<(Arc<File>, Metadata, crate::TileMap<Vec<u8>>)> {
     let _s = crate::stats::ScopedDuration::new("make_thumb");
 
     let mut image = ::image::open(&file.path).map_err(crate::E::ImageError)?;
@@ -158,12 +161,5 @@ fn make_thumb(db: Arc<crate::database::Database>, file: Arc<File>, uid: u64) -> 
 
     let metadata = Metadata { thumbs };
 
-    // Do before metadata write to prevent invalid metadata references.
-    for (id, tile) in tiles {
-        db.set(id, &tile).expect("db set");
-    }
-
-    db.set_metadata(&*file, &metadata).expect("set metadata");
-
-    Ok(metadata)
+    Ok((file, metadata, tiles))
 }

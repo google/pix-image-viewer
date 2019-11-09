@@ -299,6 +299,8 @@ impl std::default::Default for MetadataState {
 
 type Handle<T> = Fuse<RemoteHandle<T>>;
 
+pub type TileMap<T> = BTreeMap<TileRef, T>;
+
 struct App {
     db: Arc<database::Database>,
 
@@ -310,7 +312,7 @@ struct App {
     window: PistonWindow,
     texture_context: G2dTextureContext,
 
-    tiles: BTreeMap<TileRef, G2dTexture>,
+    tiles: TileMap<G2dTexture>,
 
     // Movement state & modes.
     view: view::View,
@@ -524,6 +526,25 @@ impl App {
         }
     }
 
+    async fn update_db(
+        res: R<(Arc<File>, Metadata, TileMap<Vec<u8>>)>,
+        db: Arc<database::Database>,
+    ) -> R<Metadata> {
+        match res {
+            Ok((file, metadata, tiles)) => {
+                // Do before metadata write to prevent invalid metadata references.
+                for (id, tile) in tiles {
+                    db.set(id, &tile).expect("db set");
+                }
+
+                db.set_metadata(&*file, &metadata).expect("set metadata");
+
+                Ok(metadata)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     fn make_thumb(&mut self, i: usize) {
         let image = &self.images[i];
 
@@ -536,8 +557,11 @@ impl App {
         }
 
         let tile_id_index = self.base_id + i as u64;
+        let db = Arc::clone(&self.db);
 
-        let fut = image.make_thumb(tile_id_index, Arc::clone(&self.db));
+        let fut = image
+            .make_thumb(tile_id_index)
+            .then(move |x| Self::update_db(x, db));
 
         let handle = self.thumb_executor.spawn_with_handle(fut).unwrap().fuse();
 
