@@ -292,7 +292,7 @@ pub enum MetadataState {
 
 impl std::default::Default for MetadataState {
     fn default() -> Self {
-        MetadataState::Missing
+        MetadataState::Unknown
     }
 }
 
