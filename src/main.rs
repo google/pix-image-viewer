@@ -33,11 +33,9 @@ mod stats;
 mod vec;
 mod view;
 
-use ::image::GenericImage;
-use ::image::GenericImageView;
+use crate::stats::ScopedDuration;
 use boolinator::Boolinator;
 use clap::Arg;
-use crate::stats::ScopedDuration;
 use futures::future::Fuse;
 use futures::future::FutureExt;
 use futures::future::RemoteHandle;
@@ -271,100 +269,7 @@ impl Draw for Thumb {
     }
 }
 
-type ThumbRet = R<Metadata>;
-
-fn make_thumb(db: Arc<database::Database>, file: Arc<File>, uid: u64) -> ThumbRet {
-    let _s = ScopedDuration::new("make_thumb");
-
-    let mut image = ::image::open(&file.path).map_err(E::ImageError)?;
-
-    let (w, h) = image.dimensions();
-
-    let orig_bucket = std::cmp::max(w, h).next_power_of_two();
-
-    let min_bucket = std::cmp::min(MIN_SIZE, orig_bucket);
-
-    let mut bucket = orig_bucket;
-
-    let mut thumbs: Vec<Thumb> = Vec::new();
-
-    let mut tiles: BTreeMap<TileRef, Vec<u8>> = BTreeMap::new();
-
-    while min_bucket <= bucket {
-        let current_bucket = {
-            let (w, h) = image.dimensions();
-            std::cmp::max(w, h).next_power_of_two()
-        };
-
-        // Downsample if needed.
-        if bucket < current_bucket {
-            image = image.thumbnail(bucket, bucket);
-        }
-
-        let lossy = bucket != orig_bucket;
-
-        let (w, h) = image.dimensions();
-
-        let mut chunk_id = 0u16;
-
-        let mut thumb = Thumb {
-            img_size: [w, h],
-            tile_refs: Vec::new(),
-        };
-
-        let spec = thumb.tile_spec();
-
-        for (min_y, max_y) in spec.y_ranges() {
-            let y_range = max_y - min_y;
-
-            for (min_x, max_x) in spec.x_ranges() {
-                let x_range = max_x - min_x;
-
-                let sub_image = ::image::DynamicImage::ImageRgba8(
-                    image.sub_image(min_x, min_y, x_range, y_range).to_image(),
-                );
-
-                let format = if lossy {
-                    ::image::ImageOutputFormat::JPEG(70)
-                } else {
-                    ::image::ImageOutputFormat::JPEG(100)
-                };
-
-                let mut buf = Vec::with_capacity((2 * x_range * y_range) as usize);
-                sub_image.write_to(&mut buf, format).expect("write_to");
-
-                let tile_id = TileRef::new(Pow2::from(bucket), uid, chunk_id);
-                chunk_id += 1;
-
-                tiles.insert(tile_id, buf);
-
-                thumb.tile_refs.push(tile_id);
-            }
-        }
-
-        thumbs.push(thumb);
-
-        bucket >>= 1;
-    }
-
-    thumbs.reverse();
-
-    let metadata = Metadata { thumbs };
-
-    // Do before metadata write to prevent invalid metadata references.
-    for (id, tile) in tiles {
-        db.set(id, &tile).expect("db set");
-    }
-
-    db.set_metadata(&*file, &metadata).expect("set metadata");
-
-    Ok(metadata)
-}
-
 static UPS: u64 = 100;
-
-// TODO: make flag
-static MIN_SIZE: u32 = 8;
 
 static UPSIZE_FACTOR: f64 = 1.5;
 
@@ -419,7 +324,7 @@ struct App {
     cache_todo: [VecDeque<usize>; 2],
 
     thumb_todo: [VecDeque<usize>; 2],
-    thumb_handles: BTreeMap<usize, Handle<ThumbRet>>,
+    thumb_handles: BTreeMap<usize, Handle<image::ThumbRet>>,
     thumb_executor: futures::executor::ThreadPool,
     thumb_threads: usize,
 
@@ -631,10 +536,8 @@ impl App {
         }
 
         let tile_id_index = self.base_id + i as u64;
-        let file = Arc::clone(&image.file);
-        let db = Arc::clone(&self.db);
 
-        let fut = async move { make_thumb(db, file, tile_id_index) };
+        let fut = image.make_thumb(tile_id_index, Arc::clone(&self.db));
 
         let handle = self.thumb_executor.spawn_with_handle(fut).unwrap().fuse();
 
@@ -888,7 +791,7 @@ impl App {
     }
 
     fn draw_2d(
-        thumb_handles: &BTreeMap<usize, Handle<ThumbRet>>,
+        thumb_handles: &BTreeMap<usize, Handle<image::ThumbRet>>,
         e: &Event,
         c: Context,
         g: &mut G2d,
@@ -960,9 +863,7 @@ impl App {
                     self.mouse_pan(delta);
                 });
 
-                e.button(|b| {
-                    self.button(b)
-                });
+                e.button(|b| self.button(b));
 
                 // borrowck
                 let v = &self.view;

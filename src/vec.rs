@@ -1,4 +1,4 @@
-pub use vecmath::{vec2_add, vec2_scale, vec2_square_len, vec2_sub, Vector2, vec2_mul};
+pub use vecmath::{vec2_add, vec2_mul, vec2_scale, vec2_square_len, vec2_sub, Vector2};
 
 #[inline(always)]
 pub fn vec2_div<T>(a: Vector2<T>, b: Vector2<T>) -> Vector2<T>
