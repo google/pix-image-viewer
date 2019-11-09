@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "pix-image-viewer"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "bincode 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "boolinator 2.4.0 (registry+https://github.com/rust-lang/crates.io-index)",

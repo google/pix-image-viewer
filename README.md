@@ -11,8 +11,8 @@ Screenshots: https://imgur.com/a/ENyh2NF
 
 # Installing
 
-You'll need the **nightly** rust package manager `cargo` which can be installed
-by https://rustup.rs/ or your distributions package management system.
+You'll need the rust package manager `cargo` which can be installed by
+https://rustup.rs/ or your distributions package management system.
 
 And the following build tools:
 
