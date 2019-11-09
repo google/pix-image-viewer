@@ -29,8 +29,9 @@ Heavily inspired by [Galapix](https://github.com/Galapix/galapix).
 # Limitations
 
 *   RocksDB only allows a single process to write to a single database at a
-    time. Due to this, only a single instance will be able to run at a time.
-    TODO: Add a flag to override the database/cache path.
+    time. Due to this, only a single instance will be able to run at a time with
+    the default flags. Use the `--db_path=...` flag to point new pix instances
+    at unique database locations.
 
 # Tech
 
@@ -42,12 +43,12 @@ Heavily inspired by [Galapix](https://github.com/Galapix/galapix).
 # Future direction
 
 *   Vulkan or gfx-rs? Allows more work off the render & event handling thread.
-*   Efficient handling of large images? Tiling?
+*   Efficient handling of large images? Tiling? [DONE]
 *   Efficient handling of millions of small images?
 *   Sort images by directory/size/time?
 *   Cluster images by directory/size/time?
 *   Image curation commands (delete, select, etc)?
-*   Seamless image loading/fetching/thumbnailing.
+*   Seamless image loading/fetching/thumbnailing. [DONE]
 *   Command-line thumbnailing mode?
 *   Push more magic numbers / consts into flags.
 
