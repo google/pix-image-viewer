@@ -1,9 +1,11 @@
 # Pix Image Viewer
 
-Explore tens of thousands of images in a grid. Use mouse or keyboard to zoom or
-pan around the image grid.
+Explore thousands of images in a zoomable and pannable grid.
 
-Heavily inspired by [Galapix](https://github.com/Galapix/galapix).
+Heavily inspired by [Galapix](https://github.com/Galapix/galapix) but without
+the segfaults.
+
+Screenshots: https://imgur.com/a/ENyh2NF
 
 *Disclaimer:* This is not an official Google product.
 
