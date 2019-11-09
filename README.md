@@ -14,6 +14,10 @@ Screenshots: https://imgur.com/a/ENyh2NF
 You'll need the rust package manager `cargo` which can be installed by
 https://rustup.rs/ or your distributions package management system.
 
+And the following build tools:
+
+    clang
+
 The crate is published (occasionally) to
 https://crates.io/crates/pix-image-viewer and can be installed with:
 
