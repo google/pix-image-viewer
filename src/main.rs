@@ -12,12 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(arbitrary_self_types)]
-#![recursion_limit = "1000"]
-#![feature(vec_remove_item)]
-#![feature(drain_filter)]
-#![feature(stmt_expr_attributes)]
-
 #[macro_use]
 extern crate log;
 #[macro_use]
