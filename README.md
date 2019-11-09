@@ -9,6 +9,24 @@ Screenshots: https://imgur.com/a/ENyh2NF
 
 *Disclaimer:* This is not an official Google product.
 
+# Installing
+
+You'll need the rust package manager `cargo` which can be installed by
+https://rustup.rs/ or your distributions package management system.
+
+The crate is published (occasionally) to
+https://crates.io/crates/pix-image-viewer and can be installed with:
+
+    cargo install pix-image-viewer
+
+Or from github head:
+
+    cargo install --git=https://github.com/google/pix-image-viewer.git
+
+Or within the source directory:
+
+    cargo install --path=.
+
 # Controls
 
 ## Mouse
