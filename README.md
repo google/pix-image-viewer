@@ -59,7 +59,7 @@ Or within the source directory:
 
 # Tech
 
-*   Rust nightly & friends.
+*   Rust stable & friends.
 *   RocksDB for the image thumbnail cache.
 *   [Piston](https://www.piston.rs/) game framework + OpenGL.
 *   Rust image decoding/resizing.

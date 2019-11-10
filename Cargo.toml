@@ -1,6 +1,6 @@
 [package]
 name = "pix-image-viewer"
-version = "0.2.3"
+version = "0.2.4"
 authors = ["Mason Larobina <masonl@google.com>"]
 edition = "2018"
 homepage = "https://github.com/google/pix-image-viewer"
@@ -16,7 +16,6 @@ path = "src/main.rs"
 [dependencies]
 piston = "0.49.0"
 piston_window = "0.105.0"
-wayland-client = "0.24.0"
 image = "0.22.3"
 resize = "0.3.0"
 walkdir = "2.2.9"
