@@ -963,7 +963,16 @@ fn find_images(dirs: Vec<String>) -> Vec<Arc<File>> {
                 .expect("duration since unix epoch")
                 .as_secs();
 
-            let path = entry.path().canonicalize().expect("canonicalize");
+            let path = entry.path();
+
+            let path = match path.canonicalize() {
+                Ok(path) => path,
+                Err(e) => {
+                    error!("unable to canonicalize: {:?} {:?}", path, e);
+                    continue;
+                }
+            };
+
             let path = if let Some(path) = path.to_str() {
                 path.to_owned()
             } else {
