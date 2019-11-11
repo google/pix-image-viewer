@@ -1053,9 +1053,12 @@ fn main() {
     /////////
 
     let files = find_images(paths);
-
-    assert!(!files.is_empty());
-    info!("Found {} images", files.len());
+    if files.is_empty() {
+        error!("No files found, exiting.");
+        std::process::exit(1);
+    } else {
+        info!("Found {} files", files.len());
+    }
 
     let db = database::Database::open(&db_path).expect("db open");
 

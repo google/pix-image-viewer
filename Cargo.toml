@@ -1,6 +1,6 @@
 [package]
 name = "pix-image-viewer"
-version = "0.2.5"
+version = "0.2.6"
 authors = ["Mason Larobina <masonl@google.com>"]
 edition = "2018"
 homepage = "https://github.com/google/pix-image-viewer"
