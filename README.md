@@ -11,12 +11,8 @@ Screenshots: https://imgur.com/a/ENyh2NF
 
 # Installing
 
-You'll need the rust package manager `cargo` which can be installed by
+You'll need the Rust package manager `cargo` which can be installed by
 https://rustup.rs/ or your distributions package management system.
-
-And the following build tools:
-
-    clang
 
 The crate is published (occasionally) to
 https://crates.io/crates/pix-image-viewer and can be installed with:
@@ -27,7 +23,7 @@ Or from github head:
 
     cargo install --git=https://github.com/google/pix-image-viewer.git
 
-Or within the source directory:
+Or from within the source directory:
 
     cargo install --path=.
 
@@ -52,10 +48,9 @@ Or within the source directory:
 
 # Limitations
 
-*   RocksDB only allows a single process to write to a single database at a
-    time. Due to this, only a single instance will be able to run at a time with
-    the default flags. Use the `--db_path=...` flag to point new pix instances
-    at unique database locations.
+*   SledDB only allows a single process to manage the database at a time. Due to
+    this only a single instance can run at a time *per database path*. A simple
+    workaround could be to use ephemeral `--db_path=...` locations.
 
 # Tech
 
@@ -75,8 +70,15 @@ Or within the source directory:
 *   Seamless image loading/fetching/thumbnailing. [DONE]
 *   Command-line thumbnailing mode?
 *   Push more magic numbers / consts into flags.
+*   Selecting image(s).
+*   Running commands on selected image(s).
 
 And there are many TODOs in the code itself.
+
+# Developing
+
+Please use the provided pre-commit hook to keep source code rustfmt clean and
+the tests passing on rust stable.
 
 # Source Code Headers
 
