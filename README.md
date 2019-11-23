@@ -59,10 +59,10 @@ Or within the source directory:
 
 # Tech
 
-*   Rust stable & friends.
-*   RocksDB for the image thumbnail cache.
+*   Rust stable.
+*   [Sled](https://github.com/spacejam/sled) for the image thumbnail cache.
 *   [Piston](https://www.piston.rs/) game framework + OpenGL.
-*   Rust image decoding/resizing.
+*   Rust [image](https://github.com/image-rs/image) decoding/resizing.
 
 # Future direction
 

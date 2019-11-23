@@ -77,8 +77,8 @@ fn key_for_file() {
     );
 }
 
-// Wrap rocksdb types.
-pub struct Data(rocksdb::DBVector);
+// Wrap database types.
+pub struct Data(sled::IVec);
 
 impl Deref for Data {
     type Target = [u8];
@@ -88,26 +88,14 @@ impl Deref for Data {
 }
 
 pub struct Database {
-    db: rocksdb::DB,
+    db: sled::Db,
 }
 
 impl Database {
-    pub fn open(path: &str) -> Result<Self, rocksdb::Error> {
+    pub fn open(path: &str) -> R<Self> {
         info!("Database path: {}", path);
 
-        let mut opts = rocksdb::Options::default();
-        opts.create_if_missing(true);
-        opts.increase_parallelism(num_cpus::get() as i32);
-        opts.set_compression_type(rocksdb::DBCompressionType::Snappy);
-        opts.enable_statistics();
-        opts.set_stats_dump_period_sec(60);
-
-        let mut block_options = rocksdb::BlockBasedOptions::default();
-        block_options.set_block_size(1024 * 1024);
-        block_options.set_lru_cache(1024 * 1024 * 1024);
-        opts.set_block_based_table_factory(&block_options);
-
-        let db = rocksdb::DB::open(&opts, path)?;
+        let db = sled::Db::open(path).map_err(E::DatabaseError)?;
 
         Ok(Self { db })
     }
@@ -116,7 +104,8 @@ impl Database {
         let _s = ScopedDuration::new("get_metadata");
 
         let k = Key::for_file(file);
-        if let Some(v) = self.db.get(k.as_ref()).map_err(E::RocksError)? {
+
+        if let Some(v) = self.db.get(k.as_ref()).map_err(E::DatabaseError)? {
             crate::stats::record(
                 "metadata_size_bytes",
                 std::time::Duration::from_micros(v.len() as u64),
@@ -144,7 +133,9 @@ impl Database {
             std::time::Duration::from_micros(encoded.len() as u64),
         );
 
-        self.db.put(k.as_ref(), encoded).map_err(E::RocksError)?;
+        self.db
+            .insert(k.as_ref(), encoded)
+            .map_err(E::DatabaseError)?;
 
         Ok(())
     }
@@ -153,7 +144,7 @@ impl Database {
         let _s = ScopedDuration::new("database_set");
 
         let k = Key::for_thumb(tile_ref);
-        self.db.put(&k, data).map_err(E::RocksError)?;
+        self.db.insert(&k, data).map_err(E::DatabaseError)?;
 
         Ok(())
     }
@@ -162,7 +153,7 @@ impl Database {
         let _s = ScopedDuration::new("database_get");
 
         let k = Key::for_thumb(tile_ref);
-        if let Some(v) = self.db.get(k.as_ref()).map_err(E::RocksError)? {
+        if let Some(v) = self.db.get(k.as_ref()).map_err(E::DatabaseError)? {
             Ok(Some(Data(v)))
         } else {
             Ok(None)
@@ -181,7 +172,9 @@ impl Database {
         let next_max_id = max_id + count as u64;
         assert!(next_max_id < (1u64 << 40));
 
-        self.db.put(MAX_ID, format!("{}", next_max_id)).unwrap();
+        self.db
+            .insert(MAX_ID, format!("{}", next_max_id).as_bytes())
+            .unwrap();
 
         std::dbg!(max_id)
     }

@@ -43,8 +43,8 @@ use vec::*;
 
 #[derive(Debug, Fail)]
 pub enum E {
-    #[fail(display = "rocksdb error: {:?}", 0)]
-    RocksError(rocksdb::Error),
+    #[fail(display = "database error: {:?}", 0)]
+    DatabaseError(sled::Error),
 
     #[fail(display = "decode error {:?}", 0)]
     DecodeError(bincode::Error),
