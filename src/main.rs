@@ -297,15 +297,13 @@ pub type TileMap<T> = BTreeMap<TileRef, T>;
 struct App {
     db: Arc<database::Database>,
 
-    images: Vec<image::Image>,
+    groups: BTreeMap<[u32; 2], Group>,
 
     // Graphics state
     new_window_settings: Option<WindowSettings>,
     window_settings: WindowSettings,
     window: PistonWindow,
     texture_context: G2dTextureContext,
-
-    tiles: TileMap<G2dTexture>,
 
     // Movement state & modes.
     view: view::View,
@@ -316,10 +314,6 @@ struct App {
     // Mouse distance calculations are relative to this point.
     focus: Option<Vector2<f64>>,
 
-    cache_todo: [VecDeque<usize>; 2],
-
-    thumb_todo: [VecDeque<usize>; 2],
-    thumb_handles: BTreeMap<usize, Handle<image::ThumbRet>>,
     thumb_executor: futures::executor::ThreadPool,
     thumb_threads: usize,
 
@@ -346,190 +340,132 @@ impl Stopwatch {
     }
 }
 
-impl App {
-    fn new(
-        files: Vec<Arc<File>>,
-        db: Arc<database::Database>,
-        thumbnailer_threads: usize,
-        base_id: u64,
-    ) -> Self {
-        let images: Vec<image::Image> = files.into_iter().map(image::Image::from).collect();
+// A sparse collection of images.
+#[derive(Debug, Default)]
+struct Group {
+    min_extent: [u32; 2],
+    max_extent: [u32; 2],
+    tiles: BTreeMap<TileRef, G2dTexture>,
+    images: BTreeMap<[u32; 2], image::Image>,
+    cache_todo: VecDeque<[u32; 2]>,
+    thumb_todo: VecDeque<[u32; 2]>,
+    thumb_handles: BTreeMap<[u32; 2], Handle<image::ThumbRet>>,
+}
 
-        let view = view::View::new(images.len());
-
-        let window_settings = WindowSettings::new("pix", [800.0, 600.0])
-            .exit_on_esc(true)
-            .fullscreen(false);
-
-        let mut window: PistonWindow = window_settings.build().expect("window build");
-        window.set_ups(100);
-
-        let texture_context = window.create_texture_context();
-
-        Self {
-            db,
-
-            new_window_settings: None,
-            window_settings,
-            window,
-            texture_context,
-
-            tiles: BTreeMap::new(),
-
-            view,
-            panning: false,
-            zooming: None,
-            cursor_captured: false,
-
-            cache_todo: [
-                VecDeque::with_capacity(images.len()),
-                VecDeque::with_capacity(images.len()),
-            ],
-
-            thumb_handles: BTreeMap::new(),
-            thumb_executor: futures::executor::ThreadPool::builder()
-                .pool_size(thumbnailer_threads)
-                .name_prefix("thumbnailer")
-                .create()
-                .unwrap(),
-            thumb_threads: thumbnailer_threads,
-
-            thumb_todo: [
-                VecDeque::with_capacity(images.len()),
-                VecDeque::with_capacity(images.len()),
-            ],
-
-            shift_held: false,
-
-            focus: None,
-
-            base_id,
-
-            images,
-        }
+impl Group {
+    fn add(&mut self, coords: Vector2<u32>, image: image::Image) {
+        self.min_extent = vec2_min(self.min_extent, coords);
+        self.max_extent = vec2_max(self.max_extent, vec2_add(coords, [1, 1]));
+        self.images.insert(coords, image);
     }
 
-    fn rebuild_window(&mut self, settings: WindowSettings) {
-        for image in &mut self.images {
+    fn reset(&mut self) {
+        for image in self.images.values_mut() {
             image.reset();
         }
 
-        self.window_settings = settings.clone();
-        self.window = settings.build().expect("window build");
-
         self.tiles.clear();
-        self.focus = None;
-        self.panning = false;
-        self.cursor_captured = false;
-        self.zooming = None;
+
+        self.thumb_todo.clear();
+        self.cache_todo.clear();
     }
 
-    fn target_size(&self) -> u32 {
-        ((self.view.zoom * UPSIZE_FACTOR) as u32).next_power_of_two()
+    fn recheck(&mut self) {
+        self.thumb_todo.clear();
+        self.cache_todo.clear();
+        self.cache_todo.extend(self.images.keys());
+        // TODO: reorder by mouse distance.
     }
 
-    fn load_cache(&mut self, stopwatch: &Stopwatch) {
-        let _s = ScopedDuration::new("load_tile_from_db");
+    fn load_cache(
+        &mut self,
+        view: &view::View,
+        db: &database::Database,
+        target_size: u32,
+        texture_settings: &TextureSettings,
+        texture_context: &mut G2dTextureContext,
+    ) {
+        for coords in self.cache_todo.pop_front() {
+            let image = self.images.get_mut(&coords).unwrap();
 
-        let target_size = self.target_size();
-
-        let texture_settings = TextureSettings::new();
-
-        // visible first
-        for p in 0..self.cache_todo.len() {
-            while let Some(i) = self.cache_todo[p].pop_front() {
-                let image = &mut self.images[i];
-
-                if image.metadata == MetadataState::Unknown {
-                    image.metadata = match self.db.get_metadata(&*image.file) {
-                        Ok(Some(metadata)) => MetadataState::Some(metadata),
-                        Ok(None) => MetadataState::Missing,
-                        Err(e) => {
-                            error!("get metadata error: {:?}", e);
-                            MetadataState::Errored
-                        }
-                    };
-                }
-
-                let metadata = match &image.metadata {
-                    MetadataState::Unknown => unreachable!(),
-                    MetadataState::Missing => {
-                        self.thumb_todo[p].push_back(i);
-                        continue;
+            if image.metadata == MetadataState::Unknown {
+                image.metadata = match db.get_metadata(&*image.file) {
+                    Ok(Some(metadata)) => MetadataState::Some(metadata),
+                    Ok(None) => MetadataState::Missing,
+                    Err(e) => {
+                        error!("get metadata error: {:?}", e);
+                        MetadataState::Errored
                     }
-                    MetadataState::Some(metadata) => metadata,
-                    MetadataState::Errored => continue,
                 };
-
-                let shift = if p == 0 {
-                    0
-                } else {
-                    let ratio = self.view.visible_ratio(self.view.coords(i));
-                    f64::max(0.0, ratio - 1.0).floor() as usize
-                };
-
-                let new_size = metadata.nearest(target_size >> shift);
-
-                let current_size = image.size.unwrap_or(0);
-
-                // Progressive resizing.
-                let new_size = match new_size.cmp(&current_size) {
-                    Ordering::Less => current_size - 1,
-                    Ordering::Equal => {
-                        // Already loaded target size.
-                        continue;
-                    }
-                    Ordering::Greater => current_size + 1,
-                };
-
-                // Load new tiles.
-                for tile_ref in &metadata.thumbs[new_size].tile_refs {
-                    // Already loaded.
-                    if self.tiles.contains_key(tile_ref) {
-                        continue;
-                    }
-
-                    if stopwatch.done() {
-                        self.cache_todo[p].push_front(i);
-                        return;
-                    }
-
-                    // load the tile from the cache
-                    let _s3 = ScopedDuration::new("load_tile");
-
-                    let data = self
-                        .db
-                        .get(*tile_ref)
-                        .expect("db get")
-                        .expect("missing tile");
-
-                    let image = ::image::load_from_memory(&data).expect("load image");
-
-                    // TODO: Would be great to move off thread.
-                    let image = Texture::from_image(
-                        &mut self.texture_context,
-                        &image.to_rgba(),
-                        &texture_settings,
-                    )
-                    .expect("texture");
-
-                    self.tiles.insert(*tile_ref, image);
-                }
-
-                // Unload old tiles.
-                for (j, thumb) in metadata.thumbs.iter().enumerate() {
-                    if j == new_size {
-                        continue;
-                    }
-                    for tile_ref in &thumb.tile_refs {
-                        self.tiles.remove(tile_ref);
-                    }
-                }
-
-                self.images[i].size = Some(new_size);
-
-                self.cache_todo[p].push_back(i);
             }
+
+            let metadata = match &image.metadata {
+                MetadataState::Unknown => unreachable!(),
+                MetadataState::Missing => {
+                    self.thumb_todo.push_back(coords);
+                    continue;
+                }
+                MetadataState::Some(metadata) => metadata,
+                MetadataState::Errored => continue,
+            };
+
+            let is_visible = view.is_visible(view.coords(image.i));
+
+            let shift = if is_visible {
+                0
+            } else {
+                let ratio = view.visible_ratio(view.coords(image.i));
+                f64::max(0.0, ratio - 1.0).floor() as usize
+            };
+
+            let new_size = metadata.nearest(target_size >> shift);
+
+            let current_size = image.size.unwrap_or(0);
+
+            // Progressive resizing.
+            let new_size = match new_size.cmp(&current_size) {
+                Ordering::Less => current_size - 1,
+                Ordering::Equal => {
+                    // Already loaded target size.
+                    continue;
+                }
+                Ordering::Greater => current_size + 1,
+            };
+
+            // Load new tiles.
+            for tile_ref in &metadata.thumbs[new_size].tile_refs {
+                // Already loaded.
+                if self.tiles.contains_key(tile_ref) {
+                    continue;
+                }
+
+                // load the tile from the cache
+                let _s3 = ScopedDuration::new("load_tile");
+
+                let data = db.get(*tile_ref).expect("db get").expect("missing tile");
+
+                let image = ::image::load_from_memory(&data).expect("load image");
+
+                // TODO: Would be great to move off thread.
+                let image =
+                    Texture::from_image(texture_context, &image.to_rgba(), texture_settings)
+                        .expect("texture");
+
+                self.tiles.insert(*tile_ref, image);
+            }
+
+            // Unload old tiles.
+            for (j, thumb) in metadata.thumbs.iter().enumerate() {
+                if j == new_size {
+                    continue;
+                }
+                for tile_ref in &thumb.tile_refs {
+                    self.tiles.remove(tile_ref);
+                }
+            }
+
+            image.size = Some(new_size);
+            self.cache_todo.push_back(coords);
         }
     }
 
@@ -552,40 +488,51 @@ impl App {
         }
     }
 
-    fn make_thumb(&mut self, i: usize) {
-        let image = &self.images[i];
+    fn make_thumb(
+        &mut self,
+        coords: [u32; 2],
+        base_id: u64,
+        db: &Arc<database::Database>,
+        executor: &mut futures::executor::ThreadPool,
+    ) {
+        let image = &self.images[&coords];
 
         if !image.is_missing() {
             return;
         }
 
-        if self.thumb_handles.contains_key(&i) {
+        if self.thumb_handles.contains_key(&coords) {
             return;
         }
 
-        let tile_id_index = self.base_id + i as u64;
-        let db = Arc::clone(&self.db);
+        let tile_id_index = base_id + image.i as u64;
+        let db = Arc::clone(&db);
 
         let fut = image
             .make_thumb(tile_id_index)
             .then(move |x| Self::update_db(x, db));
 
-        let handle = self.thumb_executor.spawn_with_handle(fut).unwrap().fuse();
+        let handle = executor.spawn_with_handle(fut).unwrap().fuse();
 
-        self.thumb_handles.insert(i, handle);
+        self.thumb_handles.insert(coords, handle);
     }
 
-    fn make_thumbs(&mut self) {
+    fn make_thumbs(
+        &mut self,
+        base_id: u64,
+        db: &Arc<database::Database>,
+        executor: &mut futures::executor::ThreadPool,
+    ) {
         let _s = ScopedDuration::new("make_thumbs");
+        loop {
+            if self.thumb_handles.len() > 1 {
+                return;
+            }
 
-        for p in 0..self.thumb_todo.len() {
-            while let Some(i) = {
-                if self.thumb_handles.len() > self.thumb_threads {
-                    return;
-                }
-                self.thumb_todo[p].pop_front()
-            } {
-                self.make_thumb(i);
+            if let Some(coords) = self.thumb_todo.pop_front() {
+                self.make_thumb(coords, base_id, db, executor);
+            } else {
+                break;
             }
         }
     }
@@ -593,17 +540,17 @@ impl App {
     fn recv_thumbs(&mut self) {
         let _s = ScopedDuration::new("recv_thumbs");
 
-        let mut done: Vec<usize> = Vec::new();
+        let mut done = Vec::new();
 
         let mut handles = BTreeMap::new();
         std::mem::swap(&mut handles, &mut self.thumb_handles);
 
-        for (&i, mut handle) in &mut handles {
+        for (&coords, mut handle) in &mut handles {
             select! {
                 thumb_res = handle => {
-                    self.images[i].metadata = match thumb_res {
+                    self.images.get_mut(&coords).unwrap().metadata = match thumb_res {
                         Ok(metadata) => {
-                            self.cache_todo[self.pri(i)].push_front(i);
+                            self.cache_todo.push_front(coords);
                             MetadataState::Some(metadata)
                         }
                         Err(e) => {
@@ -612,23 +559,113 @@ impl App {
                         }
                     };
 
-                    done.push(i);
+                    done.push(coords);
                 }
 
                 default => {}
             }
         }
 
-        for i in &done {
-            handles.remove(i);
+        for coords in &done {
+            handles.remove(coords);
         }
 
         std::mem::swap(&mut handles, &mut self.thumb_handles);
     }
+}
+
+impl App {
+    fn new(
+        files: Vec<Arc<File>>,
+        db: Arc<database::Database>,
+        thumbnailer_threads: usize,
+        base_id: u64,
+    ) -> Self {
+        let images: Vec<image::Image> = files
+            .into_iter()
+            .enumerate()
+            .map(|(i, file)| image::Image::from(i, file))
+            .collect();
+
+        let view = view::View::new(images.len());
+        dbg!(view.grid_size);
+
+        let group_size = std::cmp::max(1, (images.len() as f64).log2() as usize) as u32;
+
+        let grid_w = dbg!(view.grid_size[0] as usize);
+
+        let mut groups: BTreeMap<[u32; 2], Group> = BTreeMap::new();
+
+        for (i, image) in images.into_iter().enumerate() {
+            let [img_x, img_y] = [(i % grid_w) as u32, (i / grid_w) as u32];
+            let [group_x, group_y] = [img_x / group_size, img_y / group_size];
+
+            let e = groups.entry([group_x, group_y]).or_insert(Group::default());
+            e.add([img_x, img_y], image);
+        }
+
+        let window_settings = WindowSettings::new("pix", [800.0, 600.0])
+            .exit_on_esc(true)
+            .fullscreen(false);
+
+        let mut window: PistonWindow = window_settings.build().expect("window build");
+        window.set_ups(100);
+
+        let texture_context = window.create_texture_context();
+
+        Self {
+            db,
+
+            groups,
+
+            new_window_settings: None,
+            window_settings,
+            window,
+            texture_context,
+
+            view,
+            panning: false,
+            zooming: None,
+            cursor_captured: false,
+
+            thumb_executor: futures::executor::ThreadPool::builder()
+                .pool_size(thumbnailer_threads)
+                .name_prefix("thumbnailer")
+                .create()
+                .unwrap(),
+
+            thumb_threads: thumbnailer_threads,
+
+            shift_held: false,
+
+            focus: None,
+
+            base_id,
+        }
+    }
+
+    fn rebuild_window(&mut self, settings: WindowSettings) {
+        for group in self.groups.values_mut() {
+            group.reset();
+            group.tiles.clear();
+        }
+
+        self.window_settings = settings.clone();
+        self.window = settings.build().expect("window build");
+
+        self.focus = None;
+        self.panning = false;
+        self.cursor_captured = false;
+        self.zooming = None;
+    }
+
+    fn target_size(&self) -> u32 {
+        ((self.view.zoom * UPSIZE_FACTOR) as u32).next_power_of_two()
+    }
 
     fn update(&mut self, args: UpdateArgs) {
         let _s = ScopedDuration::new("update");
-        let stopwatch = Stopwatch::from_millis(10);
+        let _stopwatch = Stopwatch::from_millis(10);
 
         if let Some(z) = self.zooming {
             self.zoom(z.mul_add(args.dt, 1.0));
@@ -639,10 +676,21 @@ impl App {
             self.focus = Some(vec2_add(self.view.coords(0), self.view.mouse()));
         }
 
-        self.recv_thumbs();
-        self.make_thumbs();
+        let target_size = self.target_size();
 
-        self.load_cache(&stopwatch);
+        let texture_settings = TextureSettings::new();
+
+        for group in self.groups.values_mut() {
+            group.recv_thumbs();
+            group.make_thumbs(self.base_id, &self.db, &mut self.thumb_executor);
+            group.load_cache(
+                &self.view,
+                &*self.db,
+                target_size,
+                &texture_settings,
+                &mut self.texture_context,
+            )
+        }
     }
 
     fn resize(&mut self, win_size: Vector2<u32>) {
@@ -654,30 +702,9 @@ impl App {
     fn recalc_visible(&mut self) {
         let _s = ScopedDuration::new("recalc_visible");
 
-        for q in &mut self.cache_todo {
-            q.clear();
+        for group in self.groups.values_mut() {
+            group.recheck();
         }
-
-        for q in &mut self.thumb_todo {
-            q.clear();
-        }
-
-        let mut mouse_distance: Vec<usize> = self
-            .images
-            .iter()
-            .enumerate()
-            .filter_map(|(i, image)| if image.is_loadable() { Some(i) } else { None })
-            .collect();
-
-        mouse_distance.sort_by_key(|&i| vec2_square_len(self.view.mouse_dist(i)) as isize);
-
-        for i in mouse_distance {
-            self.cache_todo[self.pri(i)].push_back(i);
-        }
-    }
-
-    fn pri(&self, i: usize) -> usize {
-        !self.view.is_visible(self.view.coords(i)) as usize
     }
 
     fn mouse_move(&mut self, loc: Vector2<f64>) {
@@ -822,43 +849,47 @@ impl App {
     }
 
     fn draw_2d(
-        thumb_handles: &BTreeMap<usize, Handle<image::ThumbRet>>,
         e: &Event,
         c: Context,
         g: &mut G2d,
         view: &view::View,
-        tiles: &BTreeMap<TileRef, G2dTexture>,
-        images: &[image::Image],
+        groups: &BTreeMap<[u32; 2], Group>,
     ) {
         clear([0.0, 0.0, 0.0, 1.0], g);
 
         let args = e.render_args().expect("render args");
         let draw_state = DrawState::default().scissor([0, 0, args.draw_size[0], args.draw_size[1]]);
 
-        let black = color::hex("000000");
-        let missing_color = color::hex("888888");
+        let _black = color::hex("000000");
+        let _missing_color = color::hex("888888");
         let op_color = color::hex("222222");
 
-        let zoom = (view.zoom * view.zoom) / (view.zoom + 1.0);
+        //let zoom = (view.zoom * view.zoom) / (view.zoom + 1.0);
+        let zoom = view.zoom;
 
-        for (i, image) in images.iter().enumerate() {
-            let [x, y] = view.coords(i);
+        for group in groups.values() {
+            //let [x, y] = vec2_add(vec2_f64(group.min_extent), view.trans);
+            //let [w, h] = vec2_f64(vec2_sub(group.max_extent, group.min_extent));
 
-            if !view.is_visible([x, y]) {
-                continue;
-            }
+            for image in group.images.values() {
+                let [x, y] = view.coords(image.i);
 
-            let trans = c.transform.trans(x, y);
+                if !view.is_visible([x, y]) {
+                    continue;
+                }
 
-            if image.draw(trans, zoom, tiles, &draw_state, g) {
-                continue;
-            }
+                let trans = c.transform.trans(x, y);
 
-            if thumb_handles.contains_key(&i) {
-                rectangle(op_color, [0.0, 0.0, zoom, zoom], trans, g);
-                rectangle(black, [1.0, 1.0, zoom - 2.0, zoom - 2.0], trans, g);
-            } else {
-                rectangle(missing_color, [zoom / 2.0, zoom / 2.0, 1.0, 1.0], trans, g);
+                if image.draw(trans, zoom, &group.tiles, &draw_state, g) {
+                    continue;
+                }
+
+                //if thumb_handles.contains_key(&i) {
+                //    rectangle(op_color, [0.0, 0.0, zoom, zoom], trans, g);
+                //    rectangle(black, [1.0, 1.0, zoom - 2.0, zoom - 2.0], trans, g);
+                //} else {
+                //    rectangle(missing_color, [zoom / 2.0, zoom / 2.0, 1.0, 1.0], trans, g);
+                //}
             }
         }
     }
@@ -898,19 +929,19 @@ impl App {
 
                 // borrowck
                 let v = &self.view;
-                let t = &self.tiles;
-                let images = &self.images;
-                let thumb_handles = &self.thumb_handles;
+                let groups = &self.groups;
                 self.window.draw_2d(&e, |c, g, _device| {
                     let _s = ScopedDuration::new("draw_2d");
-                    Self::draw_2d(thumb_handles, &e, c, g, v, t, images);
+                    Self::draw_2d(&e, c, g, v, groups);
                 });
             } else {
                 break;
             }
         }
 
-        self.thumb_handles.clear();
+        for group in self.groups.values_mut() {
+            group.thumb_handles.clear();
+        }
     }
 }
 

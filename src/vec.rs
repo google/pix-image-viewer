@@ -41,3 +41,13 @@ pub fn vec2_ceil(a: Vector2<f64>) -> Vector2<f64> {
 pub fn vec2_log(a: Vector2<f64>, base: f64) -> Vector2<f64> {
     [a[0].log(base), a[1].log(base)]
 }
+
+#[inline(always)]
+pub fn vec2_min(a: Vector2<u32>, b: Vector2<u32>) -> Vector2<u32> {
+    [std::cmp::min(a[0], b[0]), std::cmp::min(a[1], b[1])]
+}
+
+#[inline(always)]
+pub fn vec2_max(a: Vector2<u32>, b: Vector2<u32>) -> Vector2<u32> {
+    [std::cmp::max(a[0], b[0]), std::cmp::max(a[1], b[1])]
+}

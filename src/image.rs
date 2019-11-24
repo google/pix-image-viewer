@@ -19,16 +19,18 @@ use piston_window::{DrawState, G2d, G2dTexture};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Image {
+    pub i: usize,
     pub file: Arc<File>,
     pub metadata: MetadataState,
     pub size: Option<usize>,
 }
 
 impl Image {
-    pub fn from(file: Arc<File>) -> Self {
+    pub fn from(i: usize, file: Arc<File>) -> Self {
         Image {
+            i,
             file,
             ..Default::default()
         }

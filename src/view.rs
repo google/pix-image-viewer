@@ -22,10 +22,10 @@ pub struct View {
     win_size: Vector2<f64>,
 
     // Logical dimensions.
-    grid_size: Vector2<f64>,
+    pub grid_size: Vector2<f64>,
 
     // View offsets.
-    trans: Vector2<f64>,
+    pub trans: Vector2<f64>,
 
     // Scale from logical to physical coordinates.
     pub zoom: f64,
@@ -41,13 +41,15 @@ pub struct View {
 
 impl View {
     pub fn new(num_images: usize) -> Self {
-        Self {
+        let mut ret = Self {
             num_images: num_images as f64,
             win_size: [800., 600.],
             grid_size: [1.0, 1.0],
             auto: true,
             ..Default::default()
-        }
+        };
+        ret.reset();
+        ret
     }
 
     pub fn center_mouse(&mut self) {
