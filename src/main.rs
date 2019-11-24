@@ -297,7 +297,7 @@ pub type TileMap<T> = BTreeMap<TileRef, T>;
 struct App {
     db: Arc<database::Database>,
 
-    groups: BTreeMap<[u32; 2], Group>,
+    groups: Groups,
 
     // Graphics state
     new_window_settings: Option<WindowSettings>,
@@ -340,6 +340,70 @@ impl Stopwatch {
     }
 }
 
+fn i2c(i: usize, [grid_w, _]: Vector2<u32>) -> Vector2<u32> {
+    [(i % grid_w as usize) as u32, (i / grid_w as usize) as u32]
+}
+
+#[derive(Debug, Default)]
+struct Groups {
+    grid_size: Vector2<u32>,
+    group_size: Vector2<u32>,
+    groups: BTreeMap<[u32; 2], Group>,
+}
+
+impl Groups {
+    fn group_size_from_grid_size(grid_size: Vector2<u32>) -> Vector2<u32> {
+        vec2_max(vec2_u32(vec2_log(vec2_f64(grid_size), 2.0)), [1, 1])
+    }
+
+    fn from(images: Vec<image::Image>, grid_size: Vector2<u32>) -> Self {
+        let mut ret = Groups {
+            grid_size,
+            group_size: Self::group_size_from_grid_size(grid_size),
+            ..Default::default()
+        };
+
+        for image in images.into_iter() {
+            ret.insert(image);
+        }
+
+        ret
+    }
+
+    fn group_coords(&self, coords: Vector2<u32>) -> Vector2<u32> {
+        vec2_div(coords, self.group_size)
+    }
+
+    fn insert(&mut self, image: image::Image) {
+        let coords = i2c(image.i, self.grid_size);
+        let group_coords = self.group_coords(coords);
+        let group = self.groups.entry(group_coords).or_insert(Group::default());
+        group.insert(coords, image);
+    }
+
+    fn regroup(&mut self, grid_size: Vector2<u32>) {
+        let _s = ScopedDuration::new("regroup");
+
+        let mut groups = BTreeMap::new();
+        std::mem::swap(&mut groups, &mut self.groups);
+
+        self.grid_size = grid_size;
+        self.group_size = Self::group_size_from_grid_size(grid_size);
+
+        for (_, group) in groups.into_iter() {
+            for (_, image) in group.images.into_iter() {
+                self.insert(image);
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        for group in self.groups.values_mut() {
+            group.reset();
+        }
+    }
+}
+
 // A sparse collection of images.
 #[derive(Debug, Default)]
 struct Group {
@@ -353,7 +417,7 @@ struct Group {
 }
 
 impl Group {
-    fn add(&mut self, coords: Vector2<u32>, image: image::Image) {
+    fn insert(&mut self, coords: Vector2<u32>, image: image::Image) {
         self.min_extent = vec2_min(self.min_extent, coords);
         self.max_extent = vec2_max(self.max_extent, vec2_add(coords, [1, 1]));
         self.images.insert(coords, image);
@@ -363,9 +427,7 @@ impl Group {
         for image in self.images.values_mut() {
             image.reset();
         }
-
         self.tiles.clear();
-
         self.thumb_todo.clear();
         self.cache_todo.clear();
     }
@@ -588,21 +650,8 @@ impl App {
             .collect();
 
         let view = view::View::new(images.len());
-        dbg!(view.grid_size);
 
-        let group_size = std::cmp::max(1, (images.len() as f64).log2() as usize) as u32;
-
-        let grid_w = dbg!(view.grid_size[0] as usize);
-
-        let mut groups: BTreeMap<[u32; 2], Group> = BTreeMap::new();
-
-        for (i, image) in images.into_iter().enumerate() {
-            let [img_x, img_y] = [(i % grid_w) as u32, (i / grid_w) as u32];
-            let [group_x, group_y] = [img_x / group_size, img_y / group_size];
-
-            let e = groups.entry([group_x, group_y]).or_insert(Group::default());
-            e.add([img_x, img_y], image);
-        }
+        let groups = Groups::from(images, vec2_u32(view.grid_size));
 
         let window_settings = WindowSettings::new("pix", [800.0, 600.0])
             .exit_on_esc(true)
@@ -645,10 +694,7 @@ impl App {
     }
 
     fn rebuild_window(&mut self, settings: WindowSettings) {
-        for group in self.groups.values_mut() {
-            group.reset();
-            group.tiles.clear();
-        }
+        self.groups.reset();
 
         self.window_settings = settings.clone();
         self.window = settings.build().expect("window build");
@@ -667,6 +713,11 @@ impl App {
         let _s = ScopedDuration::new("update");
         let _stopwatch = Stopwatch::from_millis(10);
 
+        let grid_size = vec2_u32(self.view.grid_size);
+        if grid_size != self.groups.grid_size {
+            self.groups.regroup(grid_size);
+        }
+
         if let Some(z) = self.zooming {
             self.zoom(z.mul_add(args.dt, 1.0));
         }
@@ -680,7 +731,7 @@ impl App {
 
         let texture_settings = TextureSettings::new();
 
-        for group in self.groups.values_mut() {
+        for group in self.groups.groups.values_mut() {
             group.recv_thumbs();
             group.make_thumbs(self.base_id, &self.db, &mut self.thumb_executor);
             group.load_cache(
@@ -702,7 +753,7 @@ impl App {
     fn recalc_visible(&mut self) {
         let _s = ScopedDuration::new("recalc_visible");
 
-        for group in self.groups.values_mut() {
+        for group in self.groups.groups.values_mut() {
             group.recheck();
         }
     }
@@ -929,7 +980,7 @@ impl App {
 
                 // borrowck
                 let v = &self.view;
-                let groups = &self.groups;
+                let groups = &self.groups.groups;
                 self.window.draw_2d(&e, |c, g, _device| {
                     let _s = ScopedDuration::new("draw_2d");
                     Self::draw_2d(&e, c, g, v, groups);
@@ -937,10 +988,6 @@ impl App {
             } else {
                 break;
             }
-        }
-
-        for group in self.groups.values_mut() {
-            group.thumb_handles.clear();
         }
     }
 }
