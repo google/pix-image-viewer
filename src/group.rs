@@ -18,13 +18,12 @@ use crate::stats::ScopedDuration;
 use crate::vec::*;
 use crate::view::View;
 use crate::Draw;
+use crate::Stopwatch;
 use crate::TileRef;
 use crate::R;
 use crate::{Metadata, MetadataState};
 use piston_window::Transformed;
-use piston_window::{
-    color, rectangle, DrawState, G2d, G2dTexture, G2dTextureContext, Texture, TextureSettings,
-};
+use piston_window::{DrawState, G2d, G2dTexture, G2dTextureContext, Texture, TextureSettings};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 
@@ -89,7 +88,8 @@ impl Group {
         target_size: u32,
         texture_settings: &TextureSettings,
         texture_context: &mut G2dTextureContext,
-    ) {
+        stopwatch: &Stopwatch,
+    ) -> bool {
         for coords in self.cache_todo.pop_front() {
             let image = self.images.get_mut(&coords).unwrap();
 
@@ -144,6 +144,11 @@ impl Group {
                     continue;
                 }
 
+                if stopwatch.done() {
+                    self.cache_todo.push_front(coords);
+                    return false;
+                }
+
                 // load the tile from the cache
                 let _s3 = ScopedDuration::new("load_tile");
 
@@ -172,6 +177,8 @@ impl Group {
             image.size = Some(new_size);
             self.cache_todo.push_back(coords);
         }
+
+        true
     }
 
     pub fn make_thumbs(&mut self, thumbnailer: &mut crate::Thumbnailer) -> bool {

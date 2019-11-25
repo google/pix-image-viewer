@@ -19,9 +19,10 @@ use crate::thumbnailer::Thumbnailer;
 use crate::vec::*;
 use crate::view::View;
 use crate::Metadata;
+use crate::Stopwatch;
 use crate::R;
 use piston_window::{DrawState, G2d, G2dTextureContext, TextureSettings};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 fn i2c(i: usize, [grid_w, _]: Vector2<u32>) -> Vector2<u32> {
     [(i % grid_w as usize) as u32, (i / grid_w as usize) as u32]
@@ -115,9 +116,17 @@ impl Groups {
         target_size: u32,
         texture_settings: &TextureSettings,
         texture_context: &mut G2dTextureContext,
+        stopwatch: &Stopwatch,
     ) {
         for group in self.groups.values_mut() {
-            group.load_cache(view, db, target_size, texture_settings, texture_context);
+            group.load_cache(
+                view,
+                db,
+                target_size,
+                texture_settings,
+                texture_context,
+                stopwatch,
+            );
         }
     }
 

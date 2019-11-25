@@ -316,7 +316,7 @@ struct App {
     shift_held: bool,
 }
 
-struct Stopwatch {
+pub struct Stopwatch {
     start: std::time::Instant,
     duration: std::time::Duration,
 }
@@ -329,7 +329,7 @@ impl Stopwatch {
         }
     }
 
-    fn done(&self) -> bool {
+    pub fn done(&self) -> bool {
         self.start.elapsed() >= self.duration
     }
 }
@@ -396,7 +396,7 @@ impl App {
 
     fn update(&mut self, args: UpdateArgs) {
         let _s = ScopedDuration::new("update");
-        let _stopwatch = Stopwatch::from_millis(10);
+        let stopwatch = Stopwatch::from_millis(10);
 
         let grid_size = vec2_u32(self.view.grid_size);
         if grid_size != self.groups.grid_size {
@@ -418,12 +418,14 @@ impl App {
 
         self.groups.recv_thumbs(&mut self.thumbnailer);
         self.groups.make_thumbs(&mut self.thumbnailer);
+
         self.groups.load_cache(
             &self.view,
             &*self.db,
             target_size,
             &texture_settings,
             &mut self.texture_context,
+            &stopwatch,
         );
     }
 
