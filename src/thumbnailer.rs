@@ -17,7 +17,10 @@ use crate::image;
 use crate::File;
 use crate::Metadata;
 use crate::TileMap;
+use crate::TileRef;
 use crate::R;
+use ::image::GenericImage;
+use ::image::GenericImageView;
 use futures::future::Fuse;
 use futures::future::FutureExt;
 use futures::future::RemoteHandle;
@@ -28,12 +31,14 @@ use std::sync::Arc;
 
 type Handle<T> = Fuse<RemoteHandle<T>>;
 
+pub type MakeThumbRet = R<Metadata>;
+
 pub struct Thumbnailer {
     db: Arc<Database>,
     threads: usize,
     base_id: u64,
     executor: futures::executor::ThreadPool,
-    handles: BTreeMap<usize, Handle<image::ThumbRet>>,
+    handles: BTreeMap<usize, Handle<MakeThumbRet>>,
 }
 
 impl Thumbnailer {
@@ -78,28 +83,6 @@ impl Thumbnailer {
         }
     }
 
-    pub fn make_thumbs(&mut self, image: &image::Image) -> bool {
-        assert!(!self.is_full());
-
-        if !image.is_missing() || self.contains(image.i) {
-            return false;
-        }
-
-        let tile_id_index = self.base_id + image.i as u64;
-
-        let db = Arc::clone(&self.db);
-
-        let fut = image
-            .make_thumb(tile_id_index)
-            .then(move |x| Self::update_db(x, db));
-
-        let handle = self.executor.spawn_with_handle(fut).unwrap().fuse();
-
-        self.handles.insert(image.i, handle);
-
-        true
-    }
-
     pub fn recv(&mut self) -> Vec<(usize, R<Metadata>)> {
         let mut ret = Vec::new();
 
@@ -118,5 +101,107 @@ impl Thumbnailer {
         }
 
         ret
+    }
+
+    pub fn make_thumbs(&mut self, image: &image::Image) -> bool {
+        assert!(!self.is_full());
+
+        if !image.is_missing() || self.contains(image.i) {
+            return false;
+        }
+
+        let uid = self.base_id + image.i as u64;
+
+        let db = Arc::clone(&self.db);
+
+        let fut =
+            Self::make_thumb(Arc::clone(&image.file), uid).then(move |r| Self::update_db(r, db));
+
+        let handle = self.executor.spawn_with_handle(fut).unwrap().fuse();
+
+        self.handles.insert(image.i, handle);
+
+        true
+    }
+
+    async fn make_thumb(file: Arc<File>, uid: u64) -> R<(Arc<File>, Metadata, TileMap<Vec<u8>>)> {
+        let _s = crate::stats::ScopedDuration::new("make_thumb");
+
+        let mut image = ::image::open(&file.path).map_err(crate::E::ImageError)?;
+
+        let (w, h) = image.dimensions();
+
+        let orig_bucket = std::cmp::max(w, h).next_power_of_two();
+
+        let min_bucket = std::cmp::min(8, orig_bucket);
+
+        let mut bucket = orig_bucket;
+
+        let mut thumbs: Vec<crate::Thumb> = Vec::new();
+
+        let mut tiles: BTreeMap<TileRef, Vec<u8>> = BTreeMap::new();
+
+        while min_bucket <= bucket {
+            let current_bucket = {
+                let (w, h) = image.dimensions();
+                std::cmp::max(w, h).next_power_of_two()
+            };
+
+            // Downsample if needed.
+            if bucket < current_bucket {
+                image = image.thumbnail(bucket, bucket);
+            }
+
+            let lossy = bucket != orig_bucket;
+
+            let (w, h) = image.dimensions();
+
+            let mut chunk_id = 0u16;
+
+            let mut thumb = crate::Thumb {
+                img_size: [w, h],
+                tile_refs: Vec::new(),
+            };
+
+            let spec = thumb.tile_spec();
+
+            for (min_y, max_y) in spec.y_ranges() {
+                let y_range = max_y - min_y;
+
+                for (min_x, max_x) in spec.x_ranges() {
+                    let x_range = max_x - min_x;
+
+                    let sub_image = ::image::DynamicImage::ImageRgba8(
+                        image.sub_image(min_x, min_y, x_range, y_range).to_image(),
+                    );
+
+                    let format = if lossy {
+                        ::image::ImageOutputFormat::JPEG(70)
+                    } else {
+                        ::image::ImageOutputFormat::JPEG(100)
+                    };
+
+                    let mut buf = Vec::with_capacity((2 * x_range * y_range) as usize);
+                    sub_image.write_to(&mut buf, format).expect("write_to");
+
+                    let tile_id = crate::TileRef::new(crate::Pow2::from(bucket), uid, chunk_id);
+                    chunk_id += 1;
+
+                    tiles.insert(tile_id, buf);
+
+                    thumb.tile_refs.push(tile_id);
+                }
+            }
+
+            thumbs.push(thumb);
+
+            bucket >>= 1;
+        }
+
+        thumbs.reverse();
+
+        let metadata = Metadata { thumbs };
+
+        Ok((file, metadata, tiles))
     }
 }
