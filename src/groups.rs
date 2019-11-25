@@ -95,13 +95,16 @@ impl Groups {
     }
 
     pub fn make_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
+        let _s = ScopedDuration::new("App::make_thumbs");
         for group in self.groups.values_mut() {
-            group.make_thumbs(thumbnailer);
+            if !group.make_thumbs(thumbnailer) {
+                return;
+            }
         }
     }
 
     pub fn recv_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
-        let _s = ScopedDuration::new("recv_thumbs");
+        let _s = ScopedDuration::new("App::recv_thumbs");
         for (i, metadata_res) in thumbnailer.recv() {
             self.update_metadata(i, metadata_res);
         }

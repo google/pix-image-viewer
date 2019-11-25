@@ -78,11 +78,11 @@ impl Thumbnailer {
         }
     }
 
-    pub fn make_thumbs(&mut self, image: &image::Image) {
+    pub fn make_thumbs(&mut self, image: &image::Image) -> bool {
         assert!(!self.is_full());
 
         if !image.is_missing() || self.contains(image.i) {
-            return;
+            return false;
         }
 
         let tile_id_index = self.base_id + image.i as u64;
@@ -96,6 +96,8 @@ impl Thumbnailer {
         let handle = self.executor.spawn_with_handle(fut).unwrap().fuse();
 
         self.handles.insert(image.i, handle);
+
+        true
     }
 
     pub fn recv(&mut self) -> Vec<(usize, R<Metadata>)> {

@@ -148,18 +148,20 @@ impl Group {
         }
     }
 
-    pub fn make_thumbs(&mut self, thumbnailer: &mut crate::Thumbnailer) {
+    pub fn make_thumbs(&mut self, thumbnailer: &mut crate::Thumbnailer) -> bool {
         let _s = ScopedDuration::new("make_thumbs");
         loop {
             if thumbnailer.is_full() {
-                return;
+                return false;
             }
 
             if let Some(coords) = self.thumb_todo.pop_front() {
                 let image = self.images.get(&coords).unwrap();
-                thumbnailer.make_thumbs(image);
+                if !thumbnailer.make_thumbs(image) {
+                    return false;
+                }
             } else {
-                break;
+                break true;
             }
         }
     }
