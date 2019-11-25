@@ -33,6 +33,7 @@ pub struct Groups {
     pub grid_size: Vector2<u32>,
     group_size: Vector2<u32>,
     groups: BTreeMap<Vector2<u32>, Group>,
+    mouse_dist: Vec<Vector2<u32>>,
 }
 
 impl Groups {
@@ -101,6 +102,13 @@ impl Groups {
         for group in self.groups.values_mut() {
             group.recheck(view);
         }
+
+        let mut mouse_dist: Vec<(&Vector2<u32>, &Group)> = self.groups.iter().collect();
+        mouse_dist.sort_by_key(|(_, g)| g.mouse_dist(view));
+
+        self.mouse_dist.clear();
+        self.mouse_dist
+            .extend(mouse_dist.into_iter().map(|(k, _)| k));
     }
 
     pub fn reset(&mut self) {
@@ -118,21 +126,25 @@ impl Groups {
         texture_context: &mut G2dTextureContext,
         stopwatch: &Stopwatch,
     ) {
-        for group in self.groups.values_mut() {
-            group.load_cache(
+        for coords in &self.mouse_dist {
+            let group = self.groups.get_mut(coords).unwrap();
+            if !group.load_cache(
                 view,
                 db,
                 target_size,
                 texture_settings,
                 texture_context,
                 stopwatch,
-            );
+            ) {
+                return;
+            }
         }
     }
 
     pub fn make_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
         let _s = ScopedDuration::new("App::make_thumbs");
-        for group in self.groups.values_mut() {
+        for coords in &self.mouse_dist {
+            let group = self.groups.get_mut(coords).unwrap();
             if !group.make_thumbs(thumbnailer) {
                 return;
             }

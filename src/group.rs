@@ -248,4 +248,10 @@ impl Group {
             }
         }
     }
+
+    pub fn mouse_dist(&self, view: &View) -> usize {
+        let midpoint = vec2_div(vec2_add(self.extents[0], self.extents[1]), [2, 2]);
+        let mouse_dist = view.mouse_dist(midpoint);
+        vec2_square_len(mouse_dist) as usize
+    }
 }
