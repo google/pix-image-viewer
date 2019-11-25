@@ -16,18 +16,12 @@ use crate::database::Database;
 use crate::stats::ScopedDuration;
 use crate::vec::*;
 use crate::view::View;
-use crate::File;
-use crate::TileMap;
 use crate::TileRef;
 use crate::R;
 use crate::{Metadata, MetadataState};
-use futures::future::FutureExt;
-use futures::select;
-use futures::task::SpawnExt;
 use piston_window::{G2dTexture, G2dTextureContext, Texture, TextureSettings};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::Arc;
 
 #[derive(Debug, Default)]
 pub struct Group {
@@ -37,7 +31,6 @@ pub struct Group {
     pub images: BTreeMap<Vector2<u32>, crate::image::Image>,
     pub cache_todo: VecDeque<Vector2<u32>>,
     pub thumb_todo: VecDeque<Vector2<u32>>,
-    pub thumb_handles: BTreeMap<Vector2<u32>, crate::Handle<crate::image::ThumbRet>>,
 }
 
 impl Group {
@@ -155,107 +148,34 @@ impl Group {
         }
     }
 
-    pub async fn update_db(
-        res: R<(Arc<File>, Metadata, TileMap<Vec<u8>>)>,
-        db: Arc<Database>,
-    ) -> R<Metadata> {
-        match res {
-            Ok((file, metadata, tiles)) => {
-                // Do before metadata write to prevent invalid metadata references.
-                for (id, tile) in tiles {
-                    db.set(id, &tile).expect("db set");
-                }
-
-                db.set_metadata(&*file, &metadata).expect("set metadata");
-
-                Ok(metadata)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    pub fn make_thumb(
-        &mut self,
-        coords: [u32; 2],
-        base_id: u64,
-        db: &Arc<Database>,
-        executor: &mut futures::executor::ThreadPool,
-    ) {
-        let image = &self.images[&coords];
-
-        if !image.is_missing() {
-            return;
-        }
-
-        if self.thumb_handles.contains_key(&coords) {
-            return;
-        }
-
-        let tile_id_index = base_id + image.i as u64;
-        let db = Arc::clone(&db);
-
-        let fut = image
-            .make_thumb(tile_id_index)
-            .then(move |x| Self::update_db(x, db));
-
-        let handle = executor.spawn_with_handle(fut).unwrap().fuse();
-
-        self.thumb_handles.insert(coords, handle);
-    }
-
-    pub fn make_thumbs(
-        &mut self,
-        base_id: u64,
-        db: &Arc<Database>,
-        executor: &mut futures::executor::ThreadPool,
-    ) {
+    pub fn make_thumbs(&mut self, thumbnailer: &mut crate::Thumbnailer) {
         let _s = ScopedDuration::new("make_thumbs");
         loop {
-            if self.thumb_handles.len() > 1 {
+            if thumbnailer.is_full() {
                 return;
             }
 
             if let Some(coords) = self.thumb_todo.pop_front() {
-                self.make_thumb(coords, base_id, db, executor);
+                let image = self.images.get(&coords).unwrap();
+                thumbnailer.make_thumbs(image);
             } else {
                 break;
             }
         }
     }
 
-    pub fn recv_thumbs(&mut self) {
-        let _s = ScopedDuration::new("recv_thumbs");
+    pub fn update_metadata(&mut self, coords: Vector2<u32>, metadata_res: R<Metadata>) {
+        let image = self.images.get_mut(&coords).unwrap();
 
-        let mut done = Vec::new();
-
-        let mut handles = BTreeMap::new();
-        std::mem::swap(&mut handles, &mut self.thumb_handles);
-
-        for (&coords, mut handle) in &mut handles {
-            select! {
-                thumb_res = handle => {
-                    self.images.get_mut(&coords).unwrap().metadata = match thumb_res {
-                        Ok(metadata) => {
-                            self.cache_todo.push_front(coords);
-                            MetadataState::Some(metadata)
-                        }
-                        Err(e) => {
-                            error!("make_thumb: {}", e);
-                            MetadataState::Errored
-                        }
-                    };
-
-                    done.push(coords);
-                }
-
-                default => {}
+        image.metadata = match metadata_res {
+            Ok(metadata) => {
+                self.cache_todo.push_front(coords);
+                MetadataState::Some(metadata)
             }
-        }
-
-        for coords in &done {
-            handles.remove(coords);
-        }
-
-        std::mem::swap(&mut handles, &mut self.thumb_handles);
+            Err(e) => {
+                error!("make_thumb: {}", e);
+                MetadataState::Errored
+            }
+        };
     }
 }

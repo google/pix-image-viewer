@@ -26,6 +26,7 @@ mod group;
 mod groups;
 mod image;
 mod stats;
+mod thumbnailer;
 mod vec;
 mod view;
 
@@ -34,11 +35,10 @@ use crate::groups::Groups;
 use crate::stats::ScopedDuration;
 use boolinator::Boolinator;
 use clap::Arg;
-use futures::future::Fuse;
-use futures::future::RemoteHandle;
 use piston_window::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use thumbnailer::Thumbnailer;
 use vec::*;
 
 #[derive(Debug, Fail)]
@@ -290,14 +290,14 @@ impl std::default::Default for MetadataState {
     }
 }
 
-type Handle<T> = Fuse<RemoteHandle<T>>;
-
 pub type TileMap<T> = BTreeMap<TileRef, T>;
 
 struct App {
     db: Arc<database::Database>,
 
     groups: groups::Groups,
+
+    thumbnailer: Thumbnailer,
 
     // Graphics state
     new_window_settings: Option<WindowSettings>,
@@ -314,12 +314,7 @@ struct App {
     // Mouse distance calculations are relative to this point.
     focus: Option<Vector2<f64>>,
 
-    thumb_executor: futures::executor::ThreadPool,
-    thumb_threads: usize,
-
     shift_held: bool,
-
-    base_id: u64,
 }
 
 struct Stopwatch {
@@ -341,12 +336,7 @@ impl Stopwatch {
 }
 
 impl App {
-    fn new(
-        files: Vec<Arc<File>>,
-        db: Arc<database::Database>,
-        thumbnailer_threads: usize,
-        base_id: u64,
-    ) -> Self {
+    fn new(files: Vec<Arc<File>>, db: Arc<database::Database>, thumbnailer: Thumbnailer) -> Self {
         let images: Vec<image::Image> = files
             .into_iter()
             .enumerate()
@@ -371,6 +361,8 @@ impl App {
 
             groups,
 
+            thumbnailer,
+
             new_window_settings: None,
             window_settings,
             window,
@@ -381,19 +373,9 @@ impl App {
             zooming: None,
             cursor_captured: false,
 
-            thumb_executor: futures::executor::ThreadPool::builder()
-                .pool_size(thumbnailer_threads)
-                .name_prefix("thumbnailer")
-                .create()
-                .unwrap(),
-
-            thumb_threads: thumbnailer_threads,
-
             shift_held: false,
 
             focus: None,
-
-            base_id,
         }
     }
 
@@ -435,9 +417,10 @@ impl App {
 
         let texture_settings = TextureSettings::new();
 
+        self.groups.recv_thumbs(&mut self.thumbnailer);
+        self.groups.make_thumbs(&mut self.thumbnailer);
+
         for group in self.groups.groups.values_mut() {
-            group.recv_thumbs();
-            group.make_thumbs(self.base_id, &self.db, &mut self.thumb_executor);
             group.load_cache(
                 &self.view,
                 &*self.db,
@@ -842,13 +825,15 @@ fn main() {
         info!("Found {} files", files.len());
     }
 
-    let db = database::Database::open(&db_path).expect("db open");
+    let db = Arc::new(database::Database::open(&db_path).expect("db open"));
 
     let base_id = db.reserve(files.len());
 
+    let thumbnailer = Thumbnailer::new(Arc::clone(&db), base_id, thumbnailer_threads);
+
     {
         let _s = ScopedDuration::new("uptime");
-        App::new(files, Arc::new(db), thumbnailer_threads, base_id).run();
+        App::new(files, Arc::clone(&db), thumbnailer).run();
     }
 
     stats::dump();

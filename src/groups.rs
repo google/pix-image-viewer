@@ -14,7 +14,10 @@
 
 use crate::group::Group;
 use crate::stats::ScopedDuration;
+use crate::thumbnailer::Thumbnailer;
 use crate::vec::*;
+use crate::Metadata;
+use crate::R;
 use std::collections::BTreeMap;
 
 fn i2c(i: usize, [grid_w, _]: Vector2<u32>) -> Vector2<u32> {
@@ -51,11 +54,22 @@ impl Groups {
         vec2_div(coords, self.group_size)
     }
 
+    fn image_coords(&self, i: usize) -> Vector2<u32> {
+        i2c(i, self.grid_size)
+    }
+
     fn insert(&mut self, image: crate::image::Image) {
-        let coords = i2c(image.i, self.grid_size);
-        let group_coords = self.group_coords(coords);
+        let image_coords = self.image_coords(image.i);
+        let group_coords = self.group_coords(image_coords);
         let group = self.groups.entry(group_coords).or_insert(Group::default());
-        group.insert(coords, image);
+        group.insert(image_coords, image);
+    }
+
+    pub fn update_metadata(&mut self, i: usize, metadata_res: R<Metadata>) {
+        let image_coords = self.image_coords(i);
+        let group_coords = self.group_coords(image_coords);
+        let group = self.groups.get_mut(&group_coords).unwrap();
+        group.update_metadata(image_coords, metadata_res);
     }
 
     pub fn regroup(&mut self, grid_size: Vector2<u32>) {
@@ -77,6 +91,19 @@ impl Groups {
     pub fn reset(&mut self) {
         for group in self.groups.values_mut() {
             group.reset();
+        }
+    }
+
+    pub fn make_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
+        for group in self.groups.values_mut() {
+            group.make_thumbs(thumbnailer);
+        }
+    }
+
+    pub fn recv_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
+        let _s = ScopedDuration::new("recv_thumbs");
+        for (i, metadata_res) in thumbnailer.recv() {
+            self.update_metadata(i, metadata_res);
         }
     }
 }
