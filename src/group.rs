@@ -22,14 +22,15 @@ use crate::TileRef;
 use crate::R;
 use crate::{Metadata, MetadataState};
 use piston_window::Transformed;
-use piston_window::{DrawState, G2d, G2dTexture, G2dTextureContext, Texture, TextureSettings};
+use piston_window::{
+    color, rectangle, DrawState, G2d, G2dTexture, G2dTextureContext, Texture, TextureSettings,
+};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Group {
-    pub min_extent: Vector2<u32>,
-    pub max_extent: Vector2<u32>,
+    pub extents: [Vector2<u32>; 2],
     pub tiles: BTreeMap<TileRef, G2dTexture>,
     pub images: BTreeMap<Vector2<u32>, Image>,
     pub cache_todo: VecDeque<Vector2<u32>>,
@@ -37,9 +38,17 @@ pub struct Group {
 }
 
 impl Group {
+    pub fn new(extents: [Vector2<u32>; 2]) -> Self {
+        Self {
+            extents,
+            tiles: BTreeMap::new(),
+            images: BTreeMap::new(),
+            cache_todo: VecDeque::new(),
+            thumb_todo: VecDeque::new(),
+        }
+    }
+
     pub fn insert(&mut self, coords: Vector2<u32>, image: Image) {
-        self.min_extent = vec2_min(self.min_extent, coords);
-        self.max_extent = vec2_max(self.max_extent, vec2_add(coords, [1, 1]));
         self.images.insert(coords, image);
     }
 
@@ -206,6 +215,18 @@ impl Group {
         draw_state: &DrawState,
         g: &mut G2d,
     ) {
+        //{
+        //    let [min, max] = self.extents;
+        //    let op_color = color::hex("FF0000");
+        //    let [x, y] = view.trans(min);
+        //    let [w, h] = vec2_scale(vec2_f64(vec2_sub(max, min)), view.zoom);
+        //    let trans = trans.trans(x, y);
+        //    rectangle(op_color, [0.0, 0.0, w, 1.0], trans, g);
+        //    rectangle(op_color, [0.0, 0.0, 1.0, h], trans, g);
+        //    rectangle(op_color, [w, 0.0, 1.0, h], trans, g);
+        //    rectangle(op_color, [0.0, h, w, 1.0], trans, g);
+        //}
+
         for (&coords, image) in &self.images {
             let coords = view.trans(coords);
 

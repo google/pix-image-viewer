@@ -64,7 +64,12 @@ impl Groups {
     fn insert(&mut self, image: crate::image::Image) {
         let image_coords = self.image_coords(image.i);
         let group_coords = self.group_coords(image_coords);
-        let group = self.groups.entry(group_coords).or_insert(Group::default());
+        let group_size = self.group_size;
+        let group = self.groups.entry(group_coords).or_insert_with(|| {
+            let min = vec2_mul(group_coords, group_size);
+            let max = vec2_add(min, group_size);
+            Group::new([min, max])
+        });
         group.insert(image_coords, image);
     }
 
