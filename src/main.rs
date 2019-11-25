@@ -22,22 +22,22 @@ extern crate failure;
 extern crate lazy_static;
 
 mod database;
+mod group;
+mod groups;
 mod image;
 mod stats;
 mod vec;
 mod view;
 
+use crate::group::Group;
+use crate::groups::Groups;
 use crate::stats::ScopedDuration;
 use boolinator::Boolinator;
 use clap::Arg;
 use futures::future::Fuse;
-use futures::future::FutureExt;
 use futures::future::RemoteHandle;
-use futures::select;
-use futures::task::SpawnExt;
 use piston_window::*;
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use vec::*;
 
@@ -297,7 +297,7 @@ pub type TileMap<T> = BTreeMap<TileRef, T>;
 struct App {
     db: Arc<database::Database>,
 
-    groups: Groups,
+    groups: groups::Groups,
 
     // Graphics state
     new_window_settings: Option<WindowSettings>,
@@ -337,302 +337,6 @@ impl Stopwatch {
 
     fn done(&self) -> bool {
         self.start.elapsed() >= self.duration
-    }
-}
-
-fn i2c(i: usize, [grid_w, _]: Vector2<u32>) -> Vector2<u32> {
-    [(i % grid_w as usize) as u32, (i / grid_w as usize) as u32]
-}
-
-#[derive(Debug, Default)]
-struct Groups {
-    grid_size: Vector2<u32>,
-    group_size: Vector2<u32>,
-    groups: BTreeMap<[u32; 2], Group>,
-}
-
-impl Groups {
-    fn group_size_from_grid_size(grid_size: Vector2<u32>) -> Vector2<u32> {
-        vec2_max(vec2_u32(vec2_log(vec2_f64(grid_size), 2.0)), [1, 1])
-    }
-
-    fn from(images: Vec<image::Image>, grid_size: Vector2<u32>) -> Self {
-        let mut ret = Groups {
-            grid_size,
-            group_size: Self::group_size_from_grid_size(grid_size),
-            ..Default::default()
-        };
-
-        for image in images.into_iter() {
-            ret.insert(image);
-        }
-
-        ret
-    }
-
-    fn group_coords(&self, coords: Vector2<u32>) -> Vector2<u32> {
-        vec2_div(coords, self.group_size)
-    }
-
-    fn insert(&mut self, image: image::Image) {
-        let coords = i2c(image.i, self.grid_size);
-        let group_coords = self.group_coords(coords);
-        let group = self.groups.entry(group_coords).or_insert(Group::default());
-        group.insert(coords, image);
-    }
-
-    fn regroup(&mut self, grid_size: Vector2<u32>) {
-        let _s = ScopedDuration::new("regroup");
-
-        let mut groups = BTreeMap::new();
-        std::mem::swap(&mut groups, &mut self.groups);
-
-        self.grid_size = grid_size;
-        self.group_size = Self::group_size_from_grid_size(grid_size);
-
-        for (_, group) in groups.into_iter() {
-            for (_, image) in group.images.into_iter() {
-                self.insert(image);
-            }
-        }
-    }
-
-    fn reset(&mut self) {
-        for group in self.groups.values_mut() {
-            group.reset();
-        }
-    }
-}
-
-// A sparse collection of images.
-#[derive(Debug, Default)]
-struct Group {
-    min_extent: [u32; 2],
-    max_extent: [u32; 2],
-    tiles: BTreeMap<TileRef, G2dTexture>,
-    images: BTreeMap<[u32; 2], image::Image>,
-    cache_todo: VecDeque<[u32; 2]>,
-    thumb_todo: VecDeque<[u32; 2]>,
-    thumb_handles: BTreeMap<[u32; 2], Handle<image::ThumbRet>>,
-}
-
-impl Group {
-    fn insert(&mut self, coords: Vector2<u32>, image: image::Image) {
-        self.min_extent = vec2_min(self.min_extent, coords);
-        self.max_extent = vec2_max(self.max_extent, vec2_add(coords, [1, 1]));
-        self.images.insert(coords, image);
-    }
-
-    fn reset(&mut self) {
-        for image in self.images.values_mut() {
-            image.reset();
-        }
-        self.tiles.clear();
-        self.thumb_todo.clear();
-        self.cache_todo.clear();
-    }
-
-    fn recheck(&mut self) {
-        self.thumb_todo.clear();
-        self.cache_todo.clear();
-        self.cache_todo.extend(self.images.keys());
-        // TODO: reorder by mouse distance.
-    }
-
-    fn load_cache(
-        &mut self,
-        view: &view::View,
-        db: &database::Database,
-        target_size: u32,
-        texture_settings: &TextureSettings,
-        texture_context: &mut G2dTextureContext,
-    ) {
-        for coords in self.cache_todo.pop_front() {
-            let image = self.images.get_mut(&coords).unwrap();
-
-            if image.metadata == MetadataState::Unknown {
-                image.metadata = match db.get_metadata(&*image.file) {
-                    Ok(Some(metadata)) => MetadataState::Some(metadata),
-                    Ok(None) => MetadataState::Missing,
-                    Err(e) => {
-                        error!("get metadata error: {:?}", e);
-                        MetadataState::Errored
-                    }
-                };
-            }
-
-            let metadata = match &image.metadata {
-                MetadataState::Unknown => unreachable!(),
-                MetadataState::Missing => {
-                    self.thumb_todo.push_back(coords);
-                    continue;
-                }
-                MetadataState::Some(metadata) => metadata,
-                MetadataState::Errored => continue,
-            };
-
-            let is_visible = view.is_visible(view.coords(image.i));
-
-            let shift = if is_visible {
-                0
-            } else {
-                let ratio = view.visible_ratio(view.coords(image.i));
-                f64::max(0.0, ratio - 1.0).floor() as usize
-            };
-
-            let new_size = metadata.nearest(target_size >> shift);
-
-            let current_size = image.size.unwrap_or(0);
-
-            // Progressive resizing.
-            let new_size = match new_size.cmp(&current_size) {
-                Ordering::Less => current_size - 1,
-                Ordering::Equal => {
-                    // Already loaded target size.
-                    continue;
-                }
-                Ordering::Greater => current_size + 1,
-            };
-
-            // Load new tiles.
-            for tile_ref in &metadata.thumbs[new_size].tile_refs {
-                // Already loaded.
-                if self.tiles.contains_key(tile_ref) {
-                    continue;
-                }
-
-                // load the tile from the cache
-                let _s3 = ScopedDuration::new("load_tile");
-
-                let data = db.get(*tile_ref).expect("db get").expect("missing tile");
-
-                let image = ::image::load_from_memory(&data).expect("load image");
-
-                // TODO: Would be great to move off thread.
-                let image =
-                    Texture::from_image(texture_context, &image.to_rgba(), texture_settings)
-                        .expect("texture");
-
-                self.tiles.insert(*tile_ref, image);
-            }
-
-            // Unload old tiles.
-            for (j, thumb) in metadata.thumbs.iter().enumerate() {
-                if j == new_size {
-                    continue;
-                }
-                for tile_ref in &thumb.tile_refs {
-                    self.tiles.remove(tile_ref);
-                }
-            }
-
-            image.size = Some(new_size);
-            self.cache_todo.push_back(coords);
-        }
-    }
-
-    async fn update_db(
-        res: R<(Arc<File>, Metadata, TileMap<Vec<u8>>)>,
-        db: Arc<database::Database>,
-    ) -> R<Metadata> {
-        match res {
-            Ok((file, metadata, tiles)) => {
-                // Do before metadata write to prevent invalid metadata references.
-                for (id, tile) in tiles {
-                    db.set(id, &tile).expect("db set");
-                }
-
-                db.set_metadata(&*file, &metadata).expect("set metadata");
-
-                Ok(metadata)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    fn make_thumb(
-        &mut self,
-        coords: [u32; 2],
-        base_id: u64,
-        db: &Arc<database::Database>,
-        executor: &mut futures::executor::ThreadPool,
-    ) {
-        let image = &self.images[&coords];
-
-        if !image.is_missing() {
-            return;
-        }
-
-        if self.thumb_handles.contains_key(&coords) {
-            return;
-        }
-
-        let tile_id_index = base_id + image.i as u64;
-        let db = Arc::clone(&db);
-
-        let fut = image
-            .make_thumb(tile_id_index)
-            .then(move |x| Self::update_db(x, db));
-
-        let handle = executor.spawn_with_handle(fut).unwrap().fuse();
-
-        self.thumb_handles.insert(coords, handle);
-    }
-
-    fn make_thumbs(
-        &mut self,
-        base_id: u64,
-        db: &Arc<database::Database>,
-        executor: &mut futures::executor::ThreadPool,
-    ) {
-        let _s = ScopedDuration::new("make_thumbs");
-        loop {
-            if self.thumb_handles.len() > 1 {
-                return;
-            }
-
-            if let Some(coords) = self.thumb_todo.pop_front() {
-                self.make_thumb(coords, base_id, db, executor);
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn recv_thumbs(&mut self) {
-        let _s = ScopedDuration::new("recv_thumbs");
-
-        let mut done = Vec::new();
-
-        let mut handles = BTreeMap::new();
-        std::mem::swap(&mut handles, &mut self.thumb_handles);
-
-        for (&coords, mut handle) in &mut handles {
-            select! {
-                thumb_res = handle => {
-                    self.images.get_mut(&coords).unwrap().metadata = match thumb_res {
-                        Ok(metadata) => {
-                            self.cache_todo.push_front(coords);
-                            MetadataState::Some(metadata)
-                        }
-                        Err(e) => {
-                            error!("make_thumb: {}", e);
-                            MetadataState::Errored
-                        }
-                    };
-
-                    done.push(coords);
-                }
-
-                default => {}
-            }
-        }
-
-        for coords in &done {
-            handles.remove(coords);
-        }
-
-        std::mem::swap(&mut handles, &mut self.thumb_handles);
     }
 }
 
