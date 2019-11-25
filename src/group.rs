@@ -13,13 +13,16 @@
 // limitations under the License.
 
 use crate::database::Database;
+use crate::image::Image;
 use crate::stats::ScopedDuration;
 use crate::vec::*;
 use crate::view::View;
+use crate::Draw;
 use crate::TileRef;
 use crate::R;
 use crate::{Metadata, MetadataState};
-use piston_window::{G2dTexture, G2dTextureContext, Texture, TextureSettings};
+use piston_window::Transformed;
+use piston_window::{DrawState, G2d, G2dTexture, G2dTextureContext, Texture, TextureSettings};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 
@@ -28,13 +31,13 @@ pub struct Group {
     pub min_extent: Vector2<u32>,
     pub max_extent: Vector2<u32>,
     pub tiles: BTreeMap<TileRef, G2dTexture>,
-    pub images: BTreeMap<Vector2<u32>, crate::image::Image>,
+    pub images: BTreeMap<Vector2<u32>, Image>,
     pub cache_todo: VecDeque<Vector2<u32>>,
     pub thumb_todo: VecDeque<Vector2<u32>>,
 }
 
 impl Group {
-    pub fn insert(&mut self, coords: Vector2<u32>, image: crate::image::Image) {
+    pub fn insert(&mut self, coords: Vector2<u32>, image: Image) {
         self.min_extent = vec2_min(self.min_extent, coords);
         self.max_extent = vec2_max(self.max_extent, vec2_add(coords, [1, 1]));
         self.images.insert(coords, image);
@@ -49,11 +52,25 @@ impl Group {
         self.cache_todo.clear();
     }
 
-    pub fn recheck(&mut self) {
+    pub fn recheck(&mut self, view: &View) {
         self.thumb_todo.clear();
         self.cache_todo.clear();
-        self.cache_todo.extend(self.images.keys());
-        // TODO: reorder by mouse distance.
+
+        let mut mouse_dist: Vec<Vector2<u32>> = self
+            .images
+            .iter()
+            .filter_map(|(&coords, image)| {
+                if image.is_loadable() {
+                    Some(coords)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        mouse_dist.sort_by_key(|&i| vec2_square_len(view.mouse_dist(i)) as isize);
+
+        self.cache_todo.extend(mouse_dist);
     }
 
     pub fn load_cache(
@@ -179,5 +196,28 @@ impl Group {
                 MetadataState::Errored
             }
         };
+    }
+
+    pub fn draw(
+        &self,
+        trans: [[f64; 3]; 2],
+        zoom: f64,
+        view: &View,
+        draw_state: &DrawState,
+        g: &mut G2d,
+    ) {
+        for (&coords, image) in &self.images {
+            let coords = view.trans(coords);
+
+            if !view.is_visible(coords) {
+                continue;
+            }
+
+            let trans = trans.trans(coords[0], coords[1]);
+
+            if image.draw(trans, zoom, &self.tiles, &draw_state, g) {
+                continue;
+            }
+        }
     }
 }

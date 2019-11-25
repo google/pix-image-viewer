@@ -30,7 +30,6 @@ mod thumbnailer;
 mod vec;
 mod view;
 
-use crate::group::Group;
 use crate::groups::Groups;
 use crate::stats::ScopedDuration;
 use boolinator::Boolinator;
@@ -419,16 +418,13 @@ impl App {
 
         self.groups.recv_thumbs(&mut self.thumbnailer);
         self.groups.make_thumbs(&mut self.thumbnailer);
-
-        for group in self.groups.groups.values_mut() {
-            group.load_cache(
-                &self.view,
-                &*self.db,
-                target_size,
-                &texture_settings,
-                &mut self.texture_context,
-            )
-        }
+        self.groups.load_cache(
+            &self.view,
+            &*self.db,
+            target_size,
+            &texture_settings,
+            &mut self.texture_context,
+        );
     }
 
     fn resize(&mut self, win_size: Vector2<u32>) {
@@ -440,9 +436,7 @@ impl App {
     fn recalc_visible(&mut self) {
         let _s = ScopedDuration::new("recalc_visible");
 
-        for group in self.groups.groups.values_mut() {
-            group.recheck();
-        }
+        self.groups.recheck(&self.view);
     }
 
     fn mouse_move(&mut self, loc: Vector2<f64>) {
@@ -456,7 +450,7 @@ impl App {
 
     fn maybe_refocus(&mut self) {
         if let Some(old) = self.focus {
-            let new = self.view.mouse_dist(0);
+            let new = self.view.mouse_dist([0, 0]);
             let delta = vec2_sub(new, old);
             if vec2_square_len(delta) > 500.0 {
                 self.force_refocus();
@@ -586,13 +580,7 @@ impl App {
         }
     }
 
-    fn draw_2d(
-        e: &Event,
-        c: Context,
-        g: &mut G2d,
-        view: &view::View,
-        groups: &BTreeMap<[u32; 2], Group>,
-    ) {
+    fn draw_2d(e: &Event, c: Context, g: &mut G2d, view: &view::View, groups: &Groups) {
         clear([0.0, 0.0, 0.0, 1.0], g);
 
         let args = e.render_args().expect("render args");
@@ -605,31 +593,7 @@ impl App {
         //let zoom = (view.zoom * view.zoom) / (view.zoom + 1.0);
         let zoom = view.zoom;
 
-        for group in groups.values() {
-            //let [x, y] = vec2_add(vec2_f64(group.min_extent), view.trans);
-            //let [w, h] = vec2_f64(vec2_sub(group.max_extent, group.min_extent));
-
-            for image in group.images.values() {
-                let [x, y] = view.coords(image.i);
-
-                if !view.is_visible([x, y]) {
-                    continue;
-                }
-
-                let trans = c.transform.trans(x, y);
-
-                if image.draw(trans, zoom, &group.tiles, &draw_state, g) {
-                    continue;
-                }
-
-                //if thumb_handles.contains_key(&i) {
-                //    rectangle(op_color, [0.0, 0.0, zoom, zoom], trans, g);
-                //    rectangle(black, [1.0, 1.0, zoom - 2.0, zoom - 2.0], trans, g);
-                //} else {
-                //    rectangle(missing_color, [zoom / 2.0, zoom / 2.0, 1.0, 1.0], trans, g);
-                //}
-            }
-        }
+        groups.draw(c.transform, zoom, view, &draw_state, g);
     }
 
     fn run(&mut self) {
@@ -667,7 +631,7 @@ impl App {
 
                 // borrowck
                 let v = &self.view;
-                let groups = &self.groups.groups;
+                let groups = &self.groups;
                 self.window.draw_2d(&e, |c, g, _device| {
                     let _s = ScopedDuration::new("draw_2d");
                     Self::draw_2d(&e, c, g, v, groups);

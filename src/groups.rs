@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::database::Database;
 use crate::group::Group;
 use crate::stats::ScopedDuration;
 use crate::thumbnailer::Thumbnailer;
 use crate::vec::*;
+use crate::view::View;
 use crate::Metadata;
 use crate::R;
-use std::collections::BTreeMap;
+use piston_window::{DrawState, G2d, G2dTextureContext, TextureSettings};
+use std::collections::{BTreeMap, VecDeque};
 
 fn i2c(i: usize, [grid_w, _]: Vector2<u32>) -> Vector2<u32> {
     [(i % grid_w as usize) as u32, (i / grid_w as usize) as u32]
@@ -27,8 +30,8 @@ fn i2c(i: usize, [grid_w, _]: Vector2<u32>) -> Vector2<u32> {
 #[derive(Debug, Default)]
 pub struct Groups {
     pub grid_size: Vector2<u32>,
-    pub group_size: Vector2<u32>,
-    pub groups: BTreeMap<[u32; 2], Group>,
+    group_size: Vector2<u32>,
+    groups: BTreeMap<Vector2<u32>, Group>,
 }
 
 impl Groups {
@@ -88,9 +91,28 @@ impl Groups {
         }
     }
 
+    pub fn recheck(&mut self, view: &View) {
+        for group in self.groups.values_mut() {
+            group.recheck(view);
+        }
+    }
+
     pub fn reset(&mut self) {
         for group in self.groups.values_mut() {
             group.reset();
+        }
+    }
+
+    pub fn load_cache(
+        &mut self,
+        view: &View,
+        db: &Database,
+        target_size: u32,
+        texture_settings: &TextureSettings,
+        texture_context: &mut G2dTextureContext,
+    ) {
+        for group in self.groups.values_mut() {
+            group.load_cache(view, db, target_size, texture_settings, texture_context);
         }
     }
 
@@ -107,6 +129,19 @@ impl Groups {
         let _s = ScopedDuration::new("App::recv_thumbs");
         for (i, metadata_res) in thumbnailer.recv() {
             self.update_metadata(i, metadata_res);
+        }
+    }
+
+    pub fn draw(
+        &self,
+        trans: [[f64; 3]; 2],
+        zoom: f64,
+        view: &View,
+        draw_state: &DrawState,
+        g: &mut G2d,
+    ) {
+        for group in self.groups.values() {
+            group.draw(trans, zoom, view, draw_state, g);
         }
     }
 }

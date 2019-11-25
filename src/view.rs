@@ -136,10 +136,14 @@ impl View {
         vec2_add(self.trans, vec2_scale(coords, self.zoom))
     }
 
-    pub fn mouse_dist(&self, i: usize) -> Vector2<f64> {
+    pub fn trans(&self, image_coords: Vector2<u32>) -> Vector2<f64> {
+        vec2_add(self.trans, vec2_scale(vec2_f64(image_coords), self.zoom))
+    }
+
+    pub fn mouse_dist(&self, image_coords: Vector2<u32>) -> Vector2<f64> {
         let mid = self.zoom / 2.0;
-        let coords = vec2_add(self.coords(i), [mid, mid]);
-        vec2_sub(coords, self.mouse)
+        let mid_coords = vec2_add(self.trans(image_coords), [mid, mid]);
+        vec2_sub(mid_coords, self.mouse)
     }
 
     pub fn is_visible(&self, min: Vector2<f64>) -> bool {
