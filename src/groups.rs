@@ -151,14 +151,6 @@ impl Groups {
         }
     }
 
-    pub fn recv_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
-        let _s = ScopedDuration::new("Groups::recv_thumbs");
-
-        for (i, metadata_res) in thumbnailer.recv() {
-            self.update_metadata(i, metadata_res);
-        }
-    }
-
     pub fn draw(&self, trans: [[f64; 3]; 2], view: &View, draw_state: &DrawState, g: &mut G2d) {
         let _s = ScopedDuration::new("Groups::draw");
 

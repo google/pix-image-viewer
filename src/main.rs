@@ -395,7 +395,8 @@ impl App {
 
         let texture_settings = TextureSettings::new();
 
-        self.groups.recv_thumbs(&mut self.thumbnailer);
+        self.recv_thumbs();
+
         self.groups.make_thumbs(&mut self.thumbnailer);
 
         self.groups.load_cache(
@@ -405,6 +406,14 @@ impl App {
             &mut self.texture_context,
             &stopwatch,
         );
+    }
+
+    pub fn recv_thumbs(&mut self) {
+        let _s = ScopedDuration::new("App::recv_thumbs");
+
+        for (i, metadata_res) in self.thumbnailer.recv() {
+            self.groups.update_metadata(i, metadata_res);
+        }
     }
 
     fn resize(&mut self, win_size: Vector2<u32>) {
