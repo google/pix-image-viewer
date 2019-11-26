@@ -105,12 +105,13 @@ impl Groups {
             group.recheck(view);
         }
 
-        let mut mouse_dist: Vec<(&Vector2<u32>, &Group)> = self.groups.iter().collect();
+        let mut mouse_dist: Vec<(&Vector2<u32>, &Group)> = Vec::with_capacity(self.groups.len());
+        mouse_dist.extend(self.groups.iter());
         mouse_dist.sort_by_key(|(_, g)| g.mouse_dist(view));
 
         self.mouse_dist.clear();
         self.mouse_dist
-            .extend(mouse_dist.into_iter().map(|(k, _)| k));
+            .extend(mouse_dist.into_iter().map(|(coords, _)| coords));
     }
 
     pub fn reset(&mut self) {
