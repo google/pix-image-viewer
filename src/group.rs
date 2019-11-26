@@ -94,12 +94,12 @@ impl Group {
 
             let metadata = image.get_metadata().expect("Image::get_metadata");
 
-            let is_visible = view.is_visible(view.coords(image.i));
+            let view_coords = view.trans(coords);
 
-            let shift = if is_visible {
+            let shift = if view.is_visible(view_coords) {
                 0
             } else {
-                let ratio = view.visible_ratio(view.coords(image.i));
+                let ratio = view.visible_ratio(view_coords);
                 f64::max(0.0, ratio - 1.0).floor() as usize
             };
 
