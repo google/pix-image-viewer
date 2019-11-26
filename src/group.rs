@@ -80,11 +80,12 @@ impl Group {
         &mut self,
         view: &View,
         db: &Database,
-        texture_settings: &TextureSettings,
         texture_context: &mut G2dTextureContext,
         stopwatch: &Stopwatch,
     ) -> bool {
         let target_size = view.target_size();
+
+        let texture_settings = TextureSettings::new();
 
         for coords in self.cache_todo.pop_front() {
             let image = self.images.get_mut(&coords).unwrap();
@@ -135,7 +136,7 @@ impl Group {
 
                 // TODO: Would be great to move off thread.
                 let image =
-                    Texture::from_image(texture_context, &image.to_rgba(), texture_settings)
+                    Texture::from_image(texture_context, &image.to_rgba(), &texture_settings)
                         .expect("texture");
 
                 self.tiles.insert(*tile_ref, image);

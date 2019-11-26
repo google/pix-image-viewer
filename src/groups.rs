@@ -20,7 +20,7 @@ use crate::thumbnailer::Thumbnailer;
 use crate::vec::*;
 use crate::view::View;
 use crate::{Metadata, Stopwatch, R};
-use piston_window::{DrawState, G2d, G2dTextureContext, TextureSettings};
+use piston_window::{DrawState, G2d, G2dTextureContext};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
@@ -126,7 +126,6 @@ impl Groups {
         &mut self,
         view: &View,
         db: &Database,
-        texture_settings: &TextureSettings,
         texture_context: &mut G2dTextureContext,
         stopwatch: &Stopwatch,
     ) {
@@ -134,7 +133,7 @@ impl Groups {
 
         for coords in &self.mouse_dist {
             let group = self.groups.get_mut(coords).unwrap();
-            if !group.load_cache(view, db, texture_settings, texture_context, stopwatch) {
+            if !group.load_cache(view, db, texture_context, stopwatch) {
                 return;
             }
         }

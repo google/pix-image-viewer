@@ -328,7 +328,6 @@ impl App {
             .fullscreen(false);
 
         let mut window: PistonWindow = window_settings.build().expect("window build");
-        window.set_ups(100);
 
         let texture_context = window.create_texture_context();
 
@@ -355,11 +354,11 @@ impl App {
         }
     }
 
-    fn rebuild_window(&mut self, settings: WindowSettings) {
+    fn rebuild_window(&mut self, new_settings: WindowSettings) {
         self.groups.reset();
 
-        self.window_settings = settings.clone();
-        self.window = settings.build().expect("window build");
+        self.window_settings = new_settings.clone();
+        self.window = new_settings.build().expect("new window build");
 
         self.focus = None;
         self.panning = false;
@@ -382,22 +381,15 @@ impl App {
 
         if self.focus.is_none() {
             self.groups.recheck(&self.view);
-            self.focus = Some(vec2_add(self.view.coords(0), self.view.mouse()));
+            self.focus = Some(self.view.mouse_dist([0, 0]));
         }
-
-        let texture_settings = TextureSettings::new();
 
         self.recv_thumbs();
 
         self.groups.make_thumbs(&mut self.thumbnailer);
 
-        self.groups.load_cache(
-            &self.view,
-            &*self.db,
-            &texture_settings,
-            &mut self.texture_context,
-            &stopwatch,
-        );
+        self.groups
+            .load_cache(&self.view, &*self.db, &mut self.texture_context, &stopwatch);
     }
 
     pub fn recv_thumbs(&mut self) {
@@ -570,8 +562,8 @@ impl App {
         loop {
             let _s = ScopedDuration::new("run_loop");
 
-            if let Some(settings) = self.new_window_settings.take() {
-                self.rebuild_window(settings);
+            if let Some(new_settings) = self.new_window_settings.take() {
+                self.rebuild_window(new_settings);
             }
 
             if let Some(e) = self.window.next() {
