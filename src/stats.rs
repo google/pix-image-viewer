@@ -50,7 +50,7 @@ pub fn dump() {
     let uptime = handle["uptime"].mean().expect("uptime") as f64;
 
     println!(
-        "{name:<20} {count:>10} {p:>40} {total:>10} {pct:>10}",
+        "{name:<30} {count:>10} {p:>40} {total:>10} {pct:>10}",
         name = "name",
         count = "count",
         p = "p50/p90/p99/p100",
@@ -75,7 +75,7 @@ pub fn dump() {
         );
 
         println!(
-            "{name:<20} {count:>10} {p:>40} {total:>10} {pct:>10.2}",
+            "{name:<30} {count:>10} {p:>40} {total:>10} {pct:>10.2}",
             name = name,
             count = count,
             p = p,
@@ -98,10 +98,6 @@ impl<'a> ScopedDuration<'a> {
             instant: Instant::now(),
         }
     }
-
-    //pub fn elapsed(&self) -> Duration {
-    //    self.instant.elapsed()
-    //}
 }
 
 impl<'a> Drop for ScopedDuration<'a> {

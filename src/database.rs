@@ -93,7 +93,7 @@ pub struct Database {
 
 impl Database {
     pub fn open(path: &str) -> R<Self> {
-        info!("Database path: {}", path);
+        info!("database path: {}", path);
 
         let db = sled::Db::open(path).map_err(E::DatabaseError)?;
 
@@ -101,7 +101,7 @@ impl Database {
     }
 
     pub fn get_metadata(&self, file: &crate::File) -> R<Option<crate::Metadata>> {
-        let _s = ScopedDuration::new("get_metadata");
+        let _s = ScopedDuration::new("Database::get_metadata");
 
         let k = Key::for_file(file);
 
@@ -120,11 +120,9 @@ impl Database {
     }
 
     pub fn set_metadata(&self, file: &crate::File, metadata: &crate::Metadata) -> R<()> {
-        let _s = ScopedDuration::new("get_metadata");
+        let _s = ScopedDuration::new("Database::set_metadata");
 
         let k = Key::for_file(file);
-
-        //println!("{:?}", metadata);
 
         let encoded: Vec<u8> = serialize(metadata).map_err(E::EncodeError)?;
 
@@ -141,7 +139,7 @@ impl Database {
     }
 
     pub fn set(&self, tile_ref: crate::TileRef, data: &[u8]) -> R<()> {
-        let _s = ScopedDuration::new("database_set");
+        let _s = ScopedDuration::new("Database::set");
 
         let k = Key::for_thumb(tile_ref);
         self.db.insert(&k, data).map_err(E::DatabaseError)?;
@@ -150,7 +148,7 @@ impl Database {
     }
 
     pub fn get(&self, tile_ref: crate::TileRef) -> R<Option<Data>> {
-        let _s = ScopedDuration::new("database_get");
+        let _s = ScopedDuration::new("Database::get");
 
         let k = Key::for_thumb(tile_ref);
         if let Some(v) = self.db.get(k.as_ref()).map_err(E::DatabaseError)? {

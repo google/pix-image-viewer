@@ -52,6 +52,10 @@ impl View {
         ret
     }
 
+    pub fn target_size(&self) -> u32 {
+        ((self.zoom * 1.5) as u32).next_power_of_two()
+    }
+
     pub fn center_mouse(&mut self) {
         self.mouse = vec2_scale(self.win_size, 0.5);
     }

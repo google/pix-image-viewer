@@ -125,7 +125,6 @@ impl Groups {
         &mut self,
         view: &View,
         db: &Database,
-        target_size: u32,
         texture_settings: &TextureSettings,
         texture_context: &mut G2dTextureContext,
         stopwatch: &Stopwatch,
@@ -134,14 +133,7 @@ impl Groups {
 
         for coords in &self.mouse_dist {
             let group = self.groups.get_mut(coords).unwrap();
-            if !group.load_cache(
-                view,
-                db,
-                target_size,
-                texture_settings,
-                texture_context,
-                stopwatch,
-            ) {
+            if !group.load_cache(view, db, texture_settings, texture_context, stopwatch) {
                 return;
             }
         }
@@ -166,18 +158,11 @@ impl Groups {
         }
     }
 
-    pub fn draw(
-        &self,
-        trans: [[f64; 3]; 2],
-        zoom: f64,
-        view: &View,
-        draw_state: &DrawState,
-        g: &mut G2d,
-    ) {
+    pub fn draw(&self, trans: [[f64; 3]; 2], view: &View, draw_state: &DrawState, g: &mut G2d) {
         let _s = ScopedDuration::new("Groups::draw");
 
         for group in self.groups.values() {
-            group.draw(trans, zoom, view, draw_state, g);
+            group.draw(trans, view, draw_state, g);
         }
     }
 }

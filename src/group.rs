@@ -17,7 +17,6 @@ use crate::image::Image;
 use crate::stats::ScopedDuration;
 use crate::vec::*;
 use crate::view::View;
-use crate::Draw;
 use crate::Stopwatch;
 use crate::TileRef;
 use crate::R;
@@ -64,32 +63,31 @@ impl Group {
         self.thumb_todo.clear();
         self.cache_todo.clear();
 
-        let mut mouse_dist: Vec<Vector2<u32>> = self
-            .images
-            .iter()
-            .filter_map(|(&coords, image)| {
-                if image.is_loadable() {
-                    Some(coords)
-                } else {
-                    None
+        let mut mouse_dist: Vec<(&Vector2<u32>, &Image)> = Vec::with_capacity(self.images.len());
+        mouse_dist.extend(self.images.iter());
+        mouse_dist.sort_by_key(|(&coords, _)| vec2_square_len(view.mouse_dist(coords)) as isize);
+
+        for (&coords, image) in &mouse_dist {
+            match image.metadata {
+                MetadataState::Some(_) | MetadataState::Unknown => {
+                    self.cache_todo.push_back(coords)
                 }
-            })
-            .collect();
-
-        mouse_dist.sort_by_key(|&i| vec2_square_len(view.mouse_dist(i)) as isize);
-
-        self.cache_todo.extend(mouse_dist);
+                MetadataState::Missing => self.thumb_todo.push_back(coords),
+                MetadataState::Errored => continue,
+            }
+        }
     }
 
     pub fn load_cache(
         &mut self,
         view: &View,
         db: &Database,
-        target_size: u32,
         texture_settings: &TextureSettings,
         texture_context: &mut G2dTextureContext,
         stopwatch: &Stopwatch,
     ) -> bool {
+        let target_size = view.target_size();
+
         for coords in self.cache_todo.pop_front() {
             let image = self.images.get_mut(&coords).unwrap();
 
@@ -182,7 +180,6 @@ impl Group {
     }
 
     pub fn make_thumbs(&mut self, thumbnailer: &mut crate::Thumbnailer) -> bool {
-        let _s = ScopedDuration::new("make_thumbs");
         loop {
             if thumbnailer.is_full() {
                 return false;
@@ -214,14 +211,7 @@ impl Group {
         };
     }
 
-    pub fn draw(
-        &self,
-        trans: [[f64; 3]; 2],
-        zoom: f64,
-        view: &View,
-        draw_state: &DrawState,
-        g: &mut G2d,
-    ) {
+    pub fn draw(&self, trans: [[f64; 3]; 2], view: &View, draw_state: &DrawState, g: &mut G2d) {
         //{
         //    let [min, max] = self.extents;
         //    let op_color = color::hex("FF0000");
@@ -243,7 +233,7 @@ impl Group {
 
             let trans = trans.trans(coords[0], coords[1]);
 
-            if image.draw(trans, zoom, &self.tiles, &draw_state, g) {
+            if image.draw(trans, view, &self.tiles, &draw_state, g) {
                 continue;
             }
         }

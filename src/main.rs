@@ -221,13 +221,11 @@ impl Thumb {
             tile_size: vec2_u32(tile_size),
         }
     }
-}
 
-impl Draw for Thumb {
     fn draw(
         &self,
         trans: [[f64; 3]; 2],
-        zoom: f64,
+        view: &view::View,
         tiles: &BTreeMap<TileRef, G2dTexture>,
         draw_state: &DrawState,
         g: &mut G2d,
@@ -236,7 +234,7 @@ impl Draw for Thumb {
 
         let max_dimension = self.max_dimension() as f64;
 
-        let trans = trans.zoom(zoom / max_dimension);
+        let trans = trans.zoom(view.zoom / max_dimension);
 
         // Center the image within the grid square.
         let [x_offset, y_offset] = {
@@ -260,19 +258,6 @@ impl Draw for Thumb {
 
         true
     }
-}
-
-static UPSIZE_FACTOR: f64 = 1.5;
-
-trait Draw {
-    fn draw(
-        &self,
-        trans: [[f64; 3]; 2],
-        zoom: f64,
-        tiles: &BTreeMap<TileRef, G2dTexture>,
-        draw_state: &DrawState,
-        g: &mut G2d,
-    ) -> bool;
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -390,12 +375,8 @@ impl App {
         self.zooming = None;
     }
 
-    fn target_size(&self) -> u32 {
-        ((self.view.zoom * UPSIZE_FACTOR) as u32).next_power_of_two()
-    }
-
     fn update(&mut self, args: UpdateArgs) {
-        let _s = ScopedDuration::new("update");
+        let _s = ScopedDuration::new("App::update");
         let stopwatch = Stopwatch::from_millis(10);
 
         let grid_size = vec2_u32(self.view.grid_size);
@@ -408,11 +389,9 @@ impl App {
         }
 
         if self.focus.is_none() {
-            self.recalc_visible();
+            self.groups.recheck(&self.view);
             self.focus = Some(vec2_add(self.view.coords(0), self.view.mouse()));
         }
-
-        let target_size = self.target_size();
 
         let texture_settings = TextureSettings::new();
 
@@ -422,7 +401,6 @@ impl App {
         self.groups.load_cache(
             &self.view,
             &*self.db,
-            target_size,
             &texture_settings,
             &mut self.texture_context,
             &stopwatch,
@@ -430,20 +408,10 @@ impl App {
     }
 
     fn resize(&mut self, win_size: Vector2<u32>) {
-        let _s = ScopedDuration::new("resize");
+        let _s = ScopedDuration::new("App::resize");
+
         self.view.resize_to(win_size);
         self.focus = None;
-    }
-
-    fn recalc_visible(&mut self) {
-        let _s = ScopedDuration::new("recalc_visible");
-
-        self.groups.recheck(&self.view);
-    }
-
-    fn mouse_move(&mut self, loc: Vector2<f64>) {
-        self.view.mouse_to(loc);
-        self.maybe_refocus();
     }
 
     fn force_refocus(&mut self) {
@@ -460,8 +428,12 @@ impl App {
         }
     }
 
+    fn mouse_move(&mut self, loc: Vector2<f64>) {
+        self.view.mouse_to(loc);
+        self.maybe_refocus();
+    }
+
     fn mouse_zoom(&mut self, v: f64) {
-        let _s = ScopedDuration::new("mouse_zoom");
         for _ in 0..(v as isize) {
             self.zoom(1.0 + self.zoom_increment());
         }
@@ -472,7 +444,6 @@ impl App {
 
     fn mouse_pan(&mut self, delta: Vector2<f64>) {
         if self.panning {
-            let _s = ScopedDuration::new("mouse_pan");
             if self.cursor_captured {
                 self.view.center_mouse();
             }
@@ -517,7 +488,6 @@ impl App {
     }
 
     fn button(&mut self, b: ButtonArgs) {
-        let _s = ScopedDuration::new("button");
         match (b.state, b.button) {
             (ButtonState::Press, Button::Keyboard(Key::Z)) => {
                 self.reset();
@@ -592,10 +562,7 @@ impl App {
         let _missing_color = color::hex("888888");
         let _op_color = color::hex("222222");
 
-        //let zoom = (view.zoom * view.zoom) / (view.zoom + 1.0);
-        let zoom = view.zoom;
-
-        groups.draw(c.transform, zoom, view, &draw_state, g);
+        groups.draw(c.transform, view, &draw_state, g);
     }
 
     fn run(&mut self) {

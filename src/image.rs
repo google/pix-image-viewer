@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Draw, File, MetadataState, TileRef};
+use crate::view::View;
+use crate::{File, Metadata, MetadataState, TileRef};
 use piston_window::{DrawState, G2d, G2dTexture};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -45,24 +46,26 @@ impl Image {
     pub fn reset(&mut self) {
         self.size = None;
     }
-}
 
-impl Draw for Image {
-    fn draw(
+    pub fn get_metadata(&self) -> Option<&Metadata> {
+        match &self.metadata {
+            MetadataState::Some(metadata) => Some(metadata),
+            _ => None,
+        }
+    }
+
+    pub fn draw(
         &self,
         trans: [[f64; 3]; 2],
-        zoom: f64,
+        view: &View,
         tiles: &BTreeMap<TileRef, G2dTexture>,
         draw_state: &DrawState,
         g: &mut G2d,
     ) -> bool {
         if let Some(n) = self.size {
-            let metadata = match &self.metadata {
-                MetadataState::Some(metadata) => metadata,
-                _ => unreachable!("image draw unreachable"),
-            };
+            let metadata = self.get_metadata().expect("Image::get_metadata");
             let thumb = &metadata.thumbs[n];
-            thumb.draw(trans, zoom, tiles, draw_state, g);
+            thumb.draw(trans, view, tiles, draw_state, g);
             true
         } else {
             false
