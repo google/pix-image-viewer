@@ -770,9 +770,9 @@ fn main() {
             .collect()
     };
 
-    let base_id = db.reserve(images.len());
+    let uid_base = db.reserve(images.len());
 
-    let thumbnailer = Thumbnailer::new(Arc::clone(&db), base_id, thumbnailer_threads);
+    let thumbnailer = Thumbnailer::new(Arc::clone(&db), uid_base, thumbnailer_threads);
 
     {
         let _s = ScopedDuration::new("uptime");

@@ -21,8 +21,10 @@ use crate::Stopwatch;
 use crate::TileRef;
 use crate::R;
 use crate::{Metadata, MetadataState};
-use piston_window::Transformed;
-use piston_window::{DrawState, G2d, G2dTexture, G2dTextureContext, Texture, TextureSettings};
+use piston_window::{
+    color, rectangle, DrawState, G2d, G2dTexture, G2dTextureContext, Texture, TextureSettings,
+    Transformed,
+};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 
@@ -203,6 +205,9 @@ impl Group {
         //    rectangle(op_color, [0.0, h, w, 1.0], trans, g);
         //}
 
+        let dot_color = color::hex("444444");
+        let mid_zoom = view.zoom * 0.5;
+
         for (&coords, image) in &self.images {
             let coords = view.trans(coords);
 
@@ -214,6 +219,8 @@ impl Group {
 
             if image.draw(trans, view, &self.tiles, &draw_state, g) {
                 continue;
+            } else {
+                rectangle(dot_color, [mid_zoom, mid_zoom, 1.0, 1.0], trans, g);
             }
         }
     }

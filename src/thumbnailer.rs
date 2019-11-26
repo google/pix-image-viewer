@@ -36,17 +36,17 @@ pub type MakeThumbRet = R<Metadata>;
 pub struct Thumbnailer {
     db: Arc<Database>,
     threads: usize,
-    base_id: u64,
+    uid_base: u64,
     executor: futures::executor::ThreadPool,
     handles: BTreeMap<usize, Handle<MakeThumbRet>>,
 }
 
 impl Thumbnailer {
-    pub fn new(db: Arc<Database>, base_id: u64, threads: usize) -> Self {
+    pub fn new(db: Arc<Database>, uid_base: u64, threads: usize) -> Self {
         Self {
             db,
             threads,
-            base_id,
+            uid_base,
             executor: futures::executor::ThreadPool::builder()
                 .pool_size(threads)
                 .name_prefix("thumbnailer")
@@ -110,7 +110,7 @@ impl Thumbnailer {
             return false;
         }
 
-        let uid = self.base_id + image.i as u64;
+        let uid = self.uid_base + image.i as u64;
 
         let db = Arc::clone(&self.db);
 
@@ -125,7 +125,7 @@ impl Thumbnailer {
     }
 
     async fn make_thumb(file: Arc<File>, uid: u64) -> R<(Arc<File>, Metadata, TileMap<Vec<u8>>)> {
-        let _s = crate::stats::ScopedDuration::new("make_thumb");
+        let _s = crate::stats::ScopedDuration::new("Thumbnailer::make_thumb");
 
         let mut image = ::image::open(&file.path).map_err(crate::E::ImageError)?;
 
