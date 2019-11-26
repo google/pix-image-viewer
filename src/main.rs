@@ -35,6 +35,7 @@ use crate::stats::ScopedDuration;
 use boolinator::Boolinator;
 use clap::Arg;
 use piston_window::*;
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use thumbnailer::Thumbnailer;
@@ -262,16 +263,9 @@ impl Thumb {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum MetadataState {
-    Unknown,
     Missing,
     Some(Metadata),
     Errored,
-}
-
-impl std::default::Default for MetadataState {
-    fn default() -> Self {
-        MetadataState::Unknown
-    }
 }
 
 pub type TileMap<T> = BTreeMap<TileRef, T>;
@@ -320,13 +314,11 @@ impl Stopwatch {
 }
 
 impl App {
-    fn new(files: Vec<Arc<File>>, db: Arc<database::Database>, thumbnailer: Thumbnailer) -> Self {
-        let images: Vec<image::Image> = files
-            .into_iter()
-            .enumerate()
-            .map(|(i, file)| image::Image::from(i, file))
-            .collect();
-
+    fn new(
+        images: Vec<image::Image>,
+        db: Arc<database::Database>,
+        thumbnailer: Thumbnailer,
+    ) -> Self {
         let view = view::View::new(images.len());
 
         let groups = Groups::from(images, vec2_u32(view.grid_size));
@@ -769,13 +761,32 @@ fn main() {
 
     let db = Arc::new(database::Database::open(&db_path).expect("db open"));
 
-    let base_id = db.reserve(files.len());
+    let images: Vec<image::Image> = {
+        let _s = ScopedDuration::new("main::load_metadata");
+        files
+            .into_par_iter()
+            .enumerate()
+            .map(|(i, file)| {
+                let metadata = match db.get_metadata(&file) {
+                    Ok(Some(metadata)) => MetadataState::Some(metadata),
+                    Ok(None) => MetadataState::Missing,
+                    Err(e) => {
+                        error!("error loading metadata for: {:?}: {:?}", file, e);
+                        MetadataState::Errored
+                    }
+                };
+                image::Image::from(i, file, metadata)
+            })
+            .collect()
+    };
+
+    let base_id = db.reserve(images.len());
 
     let thumbnailer = Thumbnailer::new(Arc::clone(&db), base_id, thumbnailer_threads);
 
     {
         let _s = ScopedDuration::new("uptime");
-        App::new(files, Arc::clone(&db), thumbnailer).run();
+        App::new(images, Arc::clone(&db), thumbnailer).run();
     }
 
     stats::dump();

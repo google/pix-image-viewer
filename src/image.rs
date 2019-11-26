@@ -18,7 +18,7 @@ use piston_window::{DrawState, G2d, G2dTexture};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Image {
     pub i: usize,
     pub file: Arc<File>,
@@ -27,16 +27,13 @@ pub struct Image {
 }
 
 impl Image {
-    pub fn from(i: usize, file: Arc<File>) -> Self {
+    pub fn from(i: usize, file: Arc<File>, metadata: MetadataState) -> Self {
         Image {
             i,
             file,
-            ..Default::default()
+            metadata,
+            size: None,
         }
-    }
-
-    pub fn is_loadable(&self) -> bool {
-        self.metadata != MetadataState::Errored
     }
 
     pub fn is_missing(&self) -> bool {

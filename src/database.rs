@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate bincode;
-use crate::stats::ScopedDuration;
-use crate::File;
+use crate::stats;
+use crate::{File, Metadata, TileRef, E, R};
 use bincode::{deserialize, serialize};
 use std::ops::Deref;
 
@@ -24,8 +23,6 @@ static TILE_PREFIX: char = 'T';
 
 // Mixed into all keys, bump when making breaking database format changes.
 static DB_VERSION: u32 = 2;
-
-use crate::{E, R};
 
 #[derive(Debug)]
 struct Key(String);
@@ -49,7 +46,7 @@ impl Key {
         ))
     }
 
-    fn for_thumb(tile_ref: crate::TileRef) -> [u8; 9] {
+    fn for_thumb(tile_ref: TileRef) -> [u8; 9] {
         let mut k: [u8; 9] = [TILE_PREFIX as u8; 9];
         (&mut k[1..9]).copy_from_slice(&tile_ref.0.to_be_bytes());
         k
@@ -100,18 +97,18 @@ impl Database {
         Ok(Self { db })
     }
 
-    pub fn get_metadata(&self, file: &crate::File) -> R<Option<crate::Metadata>> {
-        let _s = ScopedDuration::new("Database::get_metadata");
+    pub fn get_metadata(&self, file: &File) -> R<Option<Metadata>> {
+        let _s = stats::ScopedDuration::new("Database::get_metadata");
 
         let k = Key::for_file(file);
 
         if let Some(v) = self.db.get(k.as_ref()).map_err(E::DatabaseError)? {
-            crate::stats::record(
+            stats::record(
                 "metadata_size_bytes",
                 std::time::Duration::from_micros(v.len() as u64),
             );
 
-            let metadata: crate::Metadata = deserialize(&*v).map_err(E::DecodeError)?;
+            let metadata: Metadata = deserialize(&*v).map_err(E::DecodeError)?;
 
             Ok(Some(metadata))
         } else {
@@ -119,14 +116,14 @@ impl Database {
         }
     }
 
-    pub fn set_metadata(&self, file: &crate::File, metadata: &crate::Metadata) -> R<()> {
-        let _s = ScopedDuration::new("Database::set_metadata");
+    pub fn set_metadata(&self, file: &File, metadata: &Metadata) -> R<()> {
+        let _s = stats::ScopedDuration::new("Database::set_metadata");
 
         let k = Key::for_file(file);
 
         let encoded: Vec<u8> = serialize(metadata).map_err(E::EncodeError)?;
 
-        crate::stats::record(
+        stats::record(
             "metadata_size_bytes",
             std::time::Duration::from_micros(encoded.len() as u64),
         );
@@ -138,8 +135,8 @@ impl Database {
         Ok(())
     }
 
-    pub fn set(&self, tile_ref: crate::TileRef, data: &[u8]) -> R<()> {
-        let _s = ScopedDuration::new("Database::set");
+    pub fn set(&self, tile_ref: TileRef, data: &[u8]) -> R<()> {
+        let _s = stats::ScopedDuration::new("Database::set");
 
         let k = Key::for_thumb(tile_ref);
         self.db.insert(&k, data).map_err(E::DatabaseError)?;
@@ -147,8 +144,8 @@ impl Database {
         Ok(())
     }
 
-    pub fn get(&self, tile_ref: crate::TileRef) -> R<Option<Data>> {
-        let _s = ScopedDuration::new("Database::get");
+    pub fn get(&self, tile_ref: TileRef) -> R<Option<Data>> {
+        let _s = stats::ScopedDuration::new("Database::get");
 
         let k = Key::for_thumb(tile_ref);
         if let Some(v) = self.db.get(k.as_ref()).map_err(E::DatabaseError)? {

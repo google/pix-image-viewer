@@ -69,9 +69,7 @@ impl Group {
 
         for (&coords, image) in &mouse_dist {
             match image.metadata {
-                MetadataState::Some(_) | MetadataState::Unknown => {
-                    self.cache_todo.push_back(coords)
-                }
+                MetadataState::Some(_) => self.cache_todo.push_back(coords),
                 MetadataState::Missing => self.thumb_todo.push_back(coords),
                 MetadataState::Errored => continue,
             }
@@ -91,26 +89,7 @@ impl Group {
         for coords in self.cache_todo.pop_front() {
             let image = self.images.get_mut(&coords).unwrap();
 
-            if image.metadata == MetadataState::Unknown {
-                image.metadata = match db.get_metadata(&*image.file) {
-                    Ok(Some(metadata)) => MetadataState::Some(metadata),
-                    Ok(None) => MetadataState::Missing,
-                    Err(e) => {
-                        error!("get metadata error: {:?}", e);
-                        MetadataState::Errored
-                    }
-                };
-            }
-
-            let metadata = match &image.metadata {
-                MetadataState::Unknown => unreachable!(),
-                MetadataState::Missing => {
-                    self.thumb_todo.push_back(coords);
-                    continue;
-                }
-                MetadataState::Some(metadata) => metadata,
-                MetadataState::Errored => continue,
-            };
+            let metadata = image.get_metadata().expect("Image::get_metadata");
 
             let is_visible = view.is_visible(view.coords(image.i));
 
