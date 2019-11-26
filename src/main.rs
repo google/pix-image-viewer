@@ -380,7 +380,7 @@ impl App {
         let stopwatch = Stopwatch::from_millis(10);
 
         let grid_size = vec2_u32(self.view.grid_size);
-        if grid_size != self.groups.grid_size {
+        if grid_size != self.groups.grid_size() {
             self.groups.regroup(grid_size);
         }
 

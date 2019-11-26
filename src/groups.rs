@@ -14,23 +14,18 @@
 
 use crate::database::Database;
 use crate::group::Group;
+use crate::image::Image;
 use crate::stats::ScopedDuration;
 use crate::thumbnailer::Thumbnailer;
 use crate::vec::*;
 use crate::view::View;
-use crate::Metadata;
-use crate::Stopwatch;
-use crate::R;
+use crate::{Metadata, Stopwatch, R};
 use piston_window::{DrawState, G2d, G2dTextureContext, TextureSettings};
 use std::collections::BTreeMap;
 
-fn i2c(i: usize, [grid_w, _]: Vector2<u32>) -> Vector2<u32> {
-    [(i % grid_w as usize) as u32, (i / grid_w as usize) as u32]
-}
-
 #[derive(Debug, Default)]
 pub struct Groups {
-    pub grid_size: Vector2<u32>,
+    grid_size: Vector2<u32>,
     group_size: Vector2<u32>,
     groups: BTreeMap<Vector2<u32>, Group>,
     mouse_dist: Vec<Vector2<u32>>,
@@ -41,7 +36,7 @@ impl Groups {
         vec2_max(vec2_u32(vec2_log(vec2_f64(grid_size), 2.0)), [1, 1])
     }
 
-    pub fn from(images: Vec<crate::image::Image>, grid_size: Vector2<u32>) -> Self {
+    pub fn from(images: Vec<Image>, grid_size: Vector2<u32>) -> Self {
         let mut ret = Groups {
             grid_size,
             group_size: Self::group_size_from_grid_size(grid_size),
@@ -55,18 +50,23 @@ impl Groups {
         ret
     }
 
-    fn group_coords(&self, coords: Vector2<u32>) -> Vector2<u32> {
-        vec2_div(coords, self.group_size)
+    pub fn grid_size(&self) -> Vector2<u32> {
+        self.grid_size
     }
 
     fn image_coords(&self, i: usize) -> Vector2<u32> {
-        i2c(i, self.grid_size)
+        let w = self.grid_size[0] as usize;
+        [(i % w) as u32, (i / w) as u32]
     }
 
-    fn insert(&mut self, image: crate::image::Image) {
+    fn group_coords(&self, image_coords: Vector2<u32>) -> Vector2<u32> {
+        vec2_div(image_coords, self.group_size)
+    }
+
+    fn insert(&mut self, image: Image) {
         let image_coords = self.image_coords(image.i);
         let group_coords = self.group_coords(image_coords);
-        let group_size = self.group_size;
+        let group_size = self.group_size; // borrowck
         let group = self.groups.entry(group_coords).or_insert_with(|| {
             let min = vec2_mul(group_coords, group_size);
             let max = vec2_add(min, group_size);
