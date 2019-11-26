@@ -83,6 +83,8 @@ impl Group {
         texture_context: &mut G2dTextureContext,
         stopwatch: &Stopwatch,
     ) -> bool {
+        let _s3 = ScopedDuration::new("Group::load_cache");
+
         let target_size = view.target_size();
 
         let texture_settings = TextureSettings::new();
@@ -126,9 +128,6 @@ impl Group {
                     self.cache_todo.push_front(coords);
                     return false;
                 }
-
-                // load the tile from the cache
-                let _s3 = ScopedDuration::new("load_tile");
 
                 let data = db.get(*tile_ref).expect("db get").expect("missing tile");
 

@@ -21,14 +21,14 @@ use crate::vec::*;
 use crate::view::View;
 use crate::{Metadata, Stopwatch, R};
 use piston_window::{DrawState, G2d, G2dTextureContext};
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
 pub struct Groups {
     grid_size: Vector2<u32>,
     group_size: Vector2<u32>,
-    groups: BTreeMap<Vector2<u32>, Group>,
-    mouse_dist: Vec<Vector2<u32>>,
+    groups: Vec<(Vector2<u32>, Group)>,
 }
 
 impl Groups {
@@ -43,9 +43,11 @@ impl Groups {
             ..Default::default()
         };
 
+        let mut group_map: BTreeMap<Vector2<u32>, Group> = BTreeMap::new();
         for image in images.into_iter() {
-            ret.insert(image);
+            ret.insert(&mut group_map, image);
         }
+        ret.groups.extend(group_map.into_iter());
 
         ret
     }
@@ -63,61 +65,65 @@ impl Groups {
         vec2_div(image_coords, self.group_size)
     }
 
-    fn insert(&mut self, image: Image) {
+    // Only used while building or re-grouping.
+    fn insert(&mut self, group_map: &mut BTreeMap<Vector2<u32>, Group>, image: Image) {
         let image_coords = self.image_coords(image.i);
         let group_coords = self.group_coords(image_coords);
-        let group_size = self.group_size; // borrowck
-        let group = self.groups.entry(group_coords).or_insert_with(|| {
-            let min = vec2_mul(group_coords, group_size);
-            let max = vec2_add(min, group_size);
+        let group = group_map.entry(group_coords).or_insert_with(|| {
+            let min = vec2_mul(group_coords, self.group_size);
+            let max = vec2_add(min, self.group_size);
             Group::new([min, max])
         });
         group.insert(image_coords, image);
     }
 
     pub fn update_metadata(&mut self, i: usize, metadata_res: R<Metadata>) {
+        let _s = ScopedDuration::new("Groups::update_metadata");
+
         let image_coords = self.image_coords(i);
         let group_coords = self.group_coords(image_coords);
-        let group = self.groups.get_mut(&group_coords).unwrap();
-        group.update_metadata(image_coords, metadata_res);
+
+        // This looks horrible and O(n), but it's likely O(1) for thumbnails close to the mouse
+        // cursor.
+        for (coords, group) in &mut self.groups {
+            if coords == &group_coords {
+                group.update_metadata(image_coords, metadata_res);
+                return;
+            }
+        }
     }
 
     pub fn regroup(&mut self, grid_size: Vector2<u32>) {
         let _s = ScopedDuration::new("Groups::regroup");
 
-        let mut groups = BTreeMap::new();
-        std::mem::swap(&mut groups, &mut self.groups);
-
         self.grid_size = grid_size;
         self.group_size = Self::group_size_from_grid_size(grid_size);
 
-        for (_, group) in groups.into_iter() {
+        let mut groups: Vec<(Vector2<u32>, Group)> = Vec::with_capacity(self.groups.len());
+        std::mem::swap(&mut groups, &mut self.groups);
+
+        let mut group_map: BTreeMap<Vector2<u32>, Group> = BTreeMap::new();
+        for (_, group) in groups {
             for (_, image) in group.images.into_iter() {
-                self.insert(image);
+                self.insert(&mut group_map, image);
             }
         }
+
+        self.groups.extend(group_map.into_iter());
     }
 
     pub fn recheck(&mut self, view: &View) {
         let _s = ScopedDuration::new("Groups::recheck");
 
-        for group in self.groups.values_mut() {
+        for (_, group) in &mut self.groups {
             group.recheck(view);
         }
 
-        let mut mouse_dist: Vec<(&Vector2<u32>, &Group)> = Vec::with_capacity(self.groups.len());
-        mouse_dist.extend(self.groups.iter());
-        mouse_dist.sort_by_key(|(_, g)| g.mouse_dist(view));
-
-        self.mouse_dist.clear();
-        self.mouse_dist
-            .extend(mouse_dist.into_iter().map(|(coords, _)| coords));
+        self.groups.sort_by_key(|(_, g)| g.mouse_dist(view));
     }
 
     pub fn reset(&mut self) {
-        let _s = ScopedDuration::new("Groups::reset");
-
-        for group in self.groups.values_mut() {
+        for (_, group) in &mut self.groups {
             group.reset();
         }
     }
@@ -131,8 +137,7 @@ impl Groups {
     ) {
         let _s = ScopedDuration::new("Groups::load_cache");
 
-        for coords in &self.mouse_dist {
-            let group = self.groups.get_mut(coords).unwrap();
+        for (_, group) in &mut self.groups {
             if !group.load_cache(view, db, texture_context, stopwatch) {
                 return;
             }
@@ -140,10 +145,7 @@ impl Groups {
     }
 
     pub fn make_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
-        let _s = ScopedDuration::new("Groups::make_thumbs");
-
-        for coords in &self.mouse_dist {
-            let group = self.groups.get_mut(coords).unwrap();
+        for (_, group) in &mut self.groups {
             if !group.make_thumbs(thumbnailer) {
                 return;
             }
@@ -153,7 +155,7 @@ impl Groups {
     pub fn draw(&self, trans: [[f64; 3]; 2], view: &View, draw_state: &DrawState, g: &mut G2d) {
         let _s = ScopedDuration::new("Groups::draw");
 
-        for group in self.groups.values() {
+        for (_, group) in &self.groups {
             group.draw(trans, view, draw_state, g);
         }
     }

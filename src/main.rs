@@ -401,8 +401,6 @@ impl App {
     }
 
     fn resize(&mut self, win_size: Vector2<u32>) {
-        let _s = ScopedDuration::new("App::resize");
-
         self.view.resize_to(win_size);
         self.focus = None;
     }
