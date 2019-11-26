@@ -590,7 +590,7 @@ impl App {
 
         let _black = color::hex("000000");
         let _missing_color = color::hex("888888");
-        let op_color = color::hex("222222");
+        let _op_color = color::hex("222222");
 
         //let zoom = (view.zoom * view.zoom) / (view.zoom + 1.0);
         let zoom = view.zoom;

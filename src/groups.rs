@@ -83,7 +83,7 @@ impl Groups {
     }
 
     pub fn regroup(&mut self, grid_size: Vector2<u32>) {
-        let _s = ScopedDuration::new("regroup");
+        let _s = ScopedDuration::new("Groups::regroup");
 
         let mut groups = BTreeMap::new();
         std::mem::swap(&mut groups, &mut self.groups);
@@ -99,6 +99,8 @@ impl Groups {
     }
 
     pub fn recheck(&mut self, view: &View) {
+        let _s = ScopedDuration::new("Groups::recheck");
+
         for group in self.groups.values_mut() {
             group.recheck(view);
         }
@@ -112,6 +114,8 @@ impl Groups {
     }
 
     pub fn reset(&mut self) {
+        let _s = ScopedDuration::new("Groups::reset");
+
         for group in self.groups.values_mut() {
             group.reset();
         }
@@ -126,6 +130,8 @@ impl Groups {
         texture_context: &mut G2dTextureContext,
         stopwatch: &Stopwatch,
     ) {
+        let _s = ScopedDuration::new("Groups::load_cache");
+
         for coords in &self.mouse_dist {
             let group = self.groups.get_mut(coords).unwrap();
             if !group.load_cache(
@@ -142,7 +148,8 @@ impl Groups {
     }
 
     pub fn make_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
-        let _s = ScopedDuration::new("App::make_thumbs");
+        let _s = ScopedDuration::new("Groups::make_thumbs");
+
         for coords in &self.mouse_dist {
             let group = self.groups.get_mut(coords).unwrap();
             if !group.make_thumbs(thumbnailer) {
@@ -152,7 +159,8 @@ impl Groups {
     }
 
     pub fn recv_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
-        let _s = ScopedDuration::new("App::recv_thumbs");
+        let _s = ScopedDuration::new("Groups::recv_thumbs");
+
         for (i, metadata_res) in thumbnailer.recv() {
             self.update_metadata(i, metadata_res);
         }
@@ -166,6 +174,8 @@ impl Groups {
         draw_state: &DrawState,
         g: &mut G2d,
     ) {
+        let _s = ScopedDuration::new("Groups::draw");
+
         for group in self.groups.values() {
             group.draw(trans, zoom, view, draw_state, g);
         }
