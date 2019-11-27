@@ -80,6 +80,11 @@ And there are many TODOs in the code itself.
 Please use the provided pre-commit hook to keep source code rustfmt clean and
 the tests passing on rust stable.
 
+# Naming conflict
+
+I'm now aware of a naming conflict with https://github.com/linuxmint/pix so will
+likely be renaming the project soon. Ideas welcome!
+
 # Source Code Headers
 
 Every file containing source code must include copyright and license
