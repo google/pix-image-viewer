@@ -137,17 +137,21 @@ impl Groups {
     ) {
         let _s = ScopedDuration::new("Groups::load_cache");
 
-        for (_, group) in &mut self.groups {
-            if !group.load_cache(view, db, texture_context, stopwatch) {
-                return;
+        for p in 0..2 {
+            for (_, group) in &mut self.groups {
+                if !group.load_cache(p, view, db, texture_context, stopwatch) {
+                    return;
+                }
             }
         }
     }
 
     pub fn make_thumbs(&mut self, thumbnailer: &mut Thumbnailer) {
-        for (_, group) in &mut self.groups {
-            if !group.make_thumbs(thumbnailer) {
-                return;
+        for p in 0..2 {
+            for (_, group) in &mut self.groups {
+                if !group.make_thumbs(p, thumbnailer) {
+                    return;
+                }
             }
         }
     }

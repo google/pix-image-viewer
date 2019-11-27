@@ -33,8 +33,8 @@ pub struct Group {
     pub extents: [Vector2<u32>; 2],
     pub tiles: BTreeMap<TileRef, G2dTexture>,
     pub images: BTreeMap<Vector2<u32>, Image>,
-    pub cache_todo: VecDeque<Vector2<u32>>,
-    pub thumb_todo: VecDeque<Vector2<u32>>,
+    pub cache_todo: [VecDeque<Vector2<u32>>; 2],
+    pub thumb_todo: [VecDeque<Vector2<u32>>; 2],
 }
 
 impl Group {
@@ -43,8 +43,8 @@ impl Group {
             extents,
             tiles: BTreeMap::new(),
             images: BTreeMap::new(),
-            cache_todo: VecDeque::new(),
-            thumb_todo: VecDeque::new(),
+            cache_todo: [VecDeque::new(), VecDeque::new()],
+            thumb_todo: [VecDeque::new(), VecDeque::new()],
         }
     }
 
@@ -57,22 +57,39 @@ impl Group {
             image.reset();
         }
         self.tiles.clear();
-        self.thumb_todo.clear();
-        self.cache_todo.clear();
+
+        for queue in &mut self.cache_todo {
+            queue.clear();
+        }
+
+        for queue in &mut self.thumb_todo {
+            queue.clear();
+        }
     }
 
     pub fn recheck(&mut self, view: &View) {
-        self.thumb_todo.clear();
-        self.cache_todo.clear();
+        for queue in &mut self.thumb_todo {
+            queue.clear();
+        }
+
+        for queue in &mut self.cache_todo {
+            queue.clear();
+        }
 
         let mut mouse_dist: Vec<(&Vector2<u32>, &Image)> = Vec::with_capacity(self.images.len());
         mouse_dist.extend(self.images.iter());
         mouse_dist.sort_by_key(|(&coords, _)| vec2_square_len(view.mouse_dist(coords)) as isize);
 
         for (&coords, image) in &mouse_dist {
+            let p = !view.is_visible(view.trans(coords)) as usize;
+
             match image.metadata {
-                MetadataState::Some(_) => self.cache_todo.push_back(coords),
-                MetadataState::Missing => self.thumb_todo.push_back(coords),
+                MetadataState::Some(_) => {
+                    self.cache_todo[p].push_back(coords);
+                }
+                MetadataState::Missing => {
+                    self.thumb_todo[p].push_back(coords);
+                }
                 MetadataState::Errored => continue,
             }
         }
@@ -80,6 +97,7 @@ impl Group {
 
     pub fn load_cache(
         &mut self,
+        p: usize,
         view: &View,
         db: &Database,
         texture_context: &mut G2dTextureContext,
@@ -91,14 +109,14 @@ impl Group {
 
         let texture_settings = TextureSettings::new();
 
-        for coords in self.cache_todo.pop_front() {
+        while let Some(coords) = self.cache_todo[p].pop_front() {
             let image = self.images.get_mut(&coords).unwrap();
 
             let metadata = image.get_metadata().expect("Image::get_metadata");
 
             let view_coords = view.trans(coords);
 
-            let shift = if view.is_visible(view_coords) {
+            let shift = if p == 0 {
                 0
             } else {
                 let ratio = view.visible_ratio(view_coords);
@@ -127,7 +145,7 @@ impl Group {
                 }
 
                 if stopwatch.done() {
-                    self.cache_todo.push_front(coords);
+                    self.cache_todo[p].push_front(coords);
                     return false;
                 }
 
@@ -154,19 +172,19 @@ impl Group {
             }
 
             image.size = Some(new_size);
-            self.cache_todo.push_back(coords);
+            self.cache_todo[p].push_back(coords);
         }
 
         true
     }
 
-    pub fn make_thumbs(&mut self, thumbnailer: &mut crate::Thumbnailer) -> bool {
+    pub fn make_thumbs(&mut self, p: usize, thumbnailer: &mut crate::Thumbnailer) -> bool {
         loop {
             if thumbnailer.is_full() {
                 return false;
             }
 
-            if let Some(coords) = self.thumb_todo.pop_front() {
+            if let Some(coords) = self.thumb_todo[p].pop_front() {
                 let image = self.images.get(&coords).unwrap();
                 if !thumbnailer.make_thumbs(image) {
                     return false;
@@ -179,10 +197,9 @@ impl Group {
 
     pub fn update_metadata(&mut self, coords: Vector2<u32>, metadata_res: R<Metadata>) {
         let image = self.images.get_mut(&coords).unwrap();
-
         image.metadata = match metadata_res {
             Ok(metadata) => {
-                self.cache_todo.push_front(coords);
+                self.cache_todo[0].push_front(coords);
                 MetadataState::Some(metadata)
             }
             Err(e) => {

@@ -134,12 +134,6 @@ impl View {
         self.trans = vec2_sub(self.trans, trans);
     }
 
-    pub fn coords(&self, i: usize) -> Vector2<f64> {
-        let grid_w = self.grid_size[0] as usize;
-        let coords = [(i % grid_w) as f64, (i / grid_w) as f64];
-        vec2_add(self.trans, vec2_scale(coords, self.zoom))
-    }
-
     pub fn trans(&self, image_coords: Vector2<u32>) -> Vector2<f64> {
         vec2_add(self.trans, vec2_scale(vec2_f64(image_coords), self.zoom))
     }
@@ -169,20 +163,6 @@ impl View {
 #[cfg(test)]
 mod tests {
     use super::View;
-
-    #[test]
-    fn coords() {
-        let view = View {
-            win_size: [200.0, 100.0],
-            grid_size: [20.0, 10.0],
-            zoom: 10.0,
-            ..Default::default()
-        };
-
-        assert_eq!(view.coords(0), [0.0, 0.0]);
-        assert_eq!(view.coords(1), [10.0, 0.0]);
-        assert_eq!(view.coords(20), [0.0, 10.0]);
-    }
 
     #[test]
     fn is_visible() {
