@@ -176,9 +176,9 @@ impl Thumbnailer {
                     );
 
                     let format = if lossy {
-                        ::image::ImageOutputFormat::JPEG(70)
+                        ::image::ImageOutputFormat::Jpeg(70)
                     } else {
-                        ::image::ImageOutputFormat::JPEG(100)
+                        ::image::ImageOutputFormat::Jpeg(100)
                     };
 
                     let mut buf = Vec::with_capacity((2 * x_range * y_range) as usize);

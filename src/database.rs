@@ -92,7 +92,7 @@ impl Database {
     pub fn open(path: &str) -> R<Self> {
         info!("database path: {}", path);
 
-        let db = sled::Db::open(path).map_err(E::DatabaseError)?;
+        let db = sled::open(path).map_err(E::DatabaseError)?;
 
         Ok(Self { db })
     }
