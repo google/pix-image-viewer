@@ -30,9 +30,10 @@ serde = "1.0.102"
 serde_derive = "1.0.102"
 histogram = "0.6.9"
 lazy_static = "1.4.0"
-dirs = "2.0.2"
-failure = "0.1.6"
-futures = { version = "0.3.1", features = ["thread-pool"] }
+dirs-next = "2.0"
+thiserror = "1.0"
+anyhow = "1.0"
+futures = { version = "0.3.8", features = ["thread-pool"] }
 vecmath = "1.0.0"
 sled = "0.29.2"
 rayon = "1.1"

@@ -101,7 +101,7 @@ impl View {
         }
     }
 
-    pub fn mouse(&self) -> Vector2<f64> {
+    pub fn _mouse(&self) -> Vector2<f64> {
         self.mouse
     }
 

@@ -21,7 +21,6 @@ use crate::vec::*;
 use crate::view::View;
 use crate::{Metadata, Stopwatch, R};
 use piston_window::{DrawState, G2d, G2dTextureContext};
-use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]

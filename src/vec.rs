@@ -43,7 +43,7 @@ pub fn vec2_log(a: Vector2<f64>, base: f64) -> Vector2<f64> {
 }
 
 #[inline(always)]
-pub fn vec2_min(a: Vector2<u32>, b: Vector2<u32>) -> Vector2<u32> {
+pub fn _vec2_min(a: Vector2<u32>, b: Vector2<u32>) -> Vector2<u32> {
     [std::cmp::min(a[0], b[0]), std::cmp::min(a[1], b[1])]
 }
 

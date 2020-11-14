@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 lazy_static! {
     static ref STATS: Mutex<BTreeMap<&'static str, histogram::Histogram>> =
-        { Mutex::new(BTreeMap::new()) };
+        Mutex::new(BTreeMap::new());
 }
 
 pub fn record(name: &str, duration: Duration) {

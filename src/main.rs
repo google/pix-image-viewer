@@ -17,8 +17,6 @@ extern crate log;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
-extern crate failure;
-#[macro_use]
 extern crate lazy_static;
 
 mod database;
@@ -38,24 +36,25 @@ use piston_window::*;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use thiserror::Error;
 use thumbnailer::Thumbnailer;
 use vec::*;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum E {
-    #[fail(display = "database error: {:?}", 0)]
+    #[error("database error: {:?}", 0)]
     DatabaseError(sled::Error),
 
-    #[fail(display = "decode error {:?}", 0)]
+    #[error("decode error {:?}", 0)]
     DecodeError(bincode::Error),
 
-    #[fail(display = "encode error {:?}", 0)]
+    #[error("encode error {:?}", 0)]
     EncodeError(bincode::Error),
 
-    #[fail(display = "missing data for key {:?}", 0)]
+    #[error("missing data for key {:?}", 0)]
     MissingData(String),
 
-    #[fail(display = "image error: {:?}", 0)]
+    #[error("image error: {:?}", 0)]
     ImageError(::image::ImageError),
 }
 
@@ -731,7 +730,7 @@ fn main() {
     let db_path: String = if let Some(db_path) = matches.value_of("db_path") {
         db_path.to_owned()
     } else {
-        let mut db_path = dirs::cache_dir().expect("cache dir");
+        let mut db_path = dirs_next::cache_dir().expect("cache dir");
         db_path.push("pix/thumbs.db");
         db_path.to_str().expect("db path as str").to_owned()
     };
