@@ -155,7 +155,7 @@ impl Group {
 
                 // TODO: Would be great to move off thread.
                 let image =
-                    Texture::from_image(texture_context, &image.to_rgba(), &texture_settings)
+                    Texture::from_image(texture_context, &image.to_rgba8(), &texture_settings)
                         .expect("texture");
 
                 self.tiles.insert(*tile_ref, image);
@@ -234,7 +234,7 @@ impl Group {
 
             let trans = trans.trans(coords[0], coords[1]);
 
-            if image.draw(trans, view, &self.tiles, &draw_state, g) {
+            if image.draw(trans, view, &self.tiles, draw_state, g) {
                 continue;
             } else {
                 rectangle(dot_color, [mid_zoom, mid_zoom, 1.0, 1.0], trans, g);
