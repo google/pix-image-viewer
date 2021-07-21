@@ -117,7 +117,7 @@ fn tile_ref_test() {
 
     assert_eq!(
         TileRef::new(Pow2(0u8), 0x00FF_FFFF_FFFFu64, 0u16),
-        TileRef(0x00F_FFFFF_FFFF_0000u64)
+        TileRef(0x00FF_FFFF_FFFF_0000_u64)
     );
     assert_eq!(
         TileRef::new(Pow2(0u8), 0x00FF_FFFF_FFFFu64, 0u16).deconstruct(),
@@ -251,7 +251,7 @@ impl Thumb {
                 let tile_ref = it.next().unwrap();
                 if let Some(texture) = tiles.get(tile_ref) {
                     let trans = trans.trans(x_offset + x as f64, y_offset + y as f64);
-                    img.draw(texture, &draw_state, trans, g);
+                    img.draw(texture, draw_state, trans, g);
                 }
             }
         }
