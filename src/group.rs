@@ -1,4 +1,4 @@
-// Copyright 2019 Google LLC
+// Copyright 2019-2023 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,13 @@
 
 use crate::database::Database;
 use crate::image::Image;
-use crate::stats::ScopedDuration;
 use crate::vec::*;
 use crate::view::View;
 use crate::Stopwatch;
 use crate::TileRef;
 use crate::R;
 use crate::{Metadata, MetadataState};
+use log::*;
 use piston_window::{
     color, rectangle, DrawState, G2d, G2dTexture, G2dTextureContext, Texture, TextureSettings,
     Transformed,
@@ -52,6 +52,7 @@ impl Group {
         self.images.insert(coords, image);
     }
 
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         for image in self.images.values_mut() {
             image.reset();
@@ -103,8 +104,6 @@ impl Group {
         texture_context: &mut G2dTextureContext,
         stopwatch: &Stopwatch,
     ) -> bool {
-        let _s3 = ScopedDuration::new("Group::load_cache");
-
         let target_size = view.target_size();
 
         let texture_settings = TextureSettings::new();

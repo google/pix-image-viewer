@@ -43,7 +43,7 @@ Or from within the source directory:
 | Up/Down/Left/Right | Move the viewport. |
 | PageUp/PageDown | Zoom in/out. |
 | T | Toggle panning mode (capture the mouse & cursor moves the viewport). |
-| F | Toggle fullscreen mode. |
+| F | Toggle fullscreen mode. (2023-04-29: Temporarily disabled due to piston window changes) |
 | Shift | Hold to zoom and pan in larger increments. |
 
 # Limitations

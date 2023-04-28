@@ -1,4 +1,4 @@
-// Copyright 2019 Google LLC
+// Copyright 2019-2023 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ use futures::future::RemoteHandle;
 use futures::select;
 use futures::task::SpawnExt;
 use std::collections::BTreeMap;
+use std::io::Cursor;
 use std::sync::Arc;
 
 type Handle<T> = Fuse<RemoteHandle<T>>;
@@ -65,14 +66,14 @@ impl Thumbnailer {
     }
 
     async fn update_db(
-        res: R<(Arc<File>, Metadata, TileMap<Vec<u8>>)>,
+        res: R<(Arc<File>, Metadata, TileMap<Cursor<Vec<u8>>>)>,
         db: Arc<Database>,
     ) -> R<Metadata> {
         match res {
             Ok((file, metadata, tiles)) => {
                 // Do before metadata write to prevent invalid metadata references.
                 for (id, tile) in tiles {
-                    db.set(id, &tile).expect("db set");
+                    db.set(id, tile.get_ref()).expect("db set");
                 }
 
                 db.set_metadata(&*file, &metadata).expect("set metadata");
@@ -124,9 +125,10 @@ impl Thumbnailer {
         true
     }
 
-    async fn make_thumb(file: Arc<File>, uid: u64) -> R<(Arc<File>, Metadata, TileMap<Vec<u8>>)> {
-        let _s = crate::stats::ScopedDuration::new("Thumbnailer::make_thumb");
-
+    async fn make_thumb(
+        file: Arc<File>,
+        uid: u64,
+    ) -> R<(Arc<File>, Metadata, TileMap<Cursor<Vec<u8>>>)> {
         let mut image = ::image::open(&file.path).map_err(crate::E::ImageError)?;
 
         let (w, h) = image.dimensions();
@@ -139,7 +141,7 @@ impl Thumbnailer {
 
         let mut thumbs: Vec<crate::Thumb> = Vec::new();
 
-        let mut tiles: BTreeMap<TileRef, Vec<u8>> = BTreeMap::new();
+        let mut tiles: BTreeMap<TileRef, Cursor<Vec<u8>>> = BTreeMap::new();
 
         while min_bucket <= bucket {
             let current_bucket = {
@@ -181,7 +183,7 @@ impl Thumbnailer {
                         ::image::ImageOutputFormat::Jpeg(100)
                     };
 
-                    let mut buf = Vec::with_capacity((2 * x_range * y_range) as usize);
+                    let mut buf = Cursor::new(Vec::with_capacity((2 * x_range * y_range) as usize));
                     sub_image.write_to(&mut buf, format).expect("write_to");
 
                     let tile_id = crate::TileRef::new(crate::Pow2::from(bucket), uid, chunk_id);

@@ -1,4 +1,4 @@
-// Copyright 2019 Google LLC
+// Copyright 2019-2023 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 use crate::database::Database;
 use crate::group::Group;
 use crate::image::Image;
-use crate::stats::ScopedDuration;
 use crate::thumbnailer::Thumbnailer;
 use crate::vec::*;
 use crate::view::View;
@@ -77,8 +76,6 @@ impl Groups {
     }
 
     pub fn update_metadata(&mut self, i: usize, metadata_res: R<Metadata>) {
-        let _s = ScopedDuration::new("Groups::update_metadata");
-
         let image_coords = self.image_coords(i);
         let group_coords = self.group_coords(image_coords);
 
@@ -93,8 +90,6 @@ impl Groups {
     }
 
     pub fn regroup(&mut self, grid_size: Vector2<u32>) {
-        let _s = ScopedDuration::new("Groups::regroup");
-
         self.grid_size = grid_size;
         self.group_size = Self::group_size_from_grid_size(grid_size);
 
@@ -112,8 +107,6 @@ impl Groups {
     }
 
     pub fn recheck(&mut self, view: &View) {
-        let _s = ScopedDuration::new("Groups::recheck");
-
         for (_, group) in &mut self.groups {
             group.recheck(view);
         }
@@ -121,6 +114,7 @@ impl Groups {
         self.groups.sort_by_key(|(_, g)| g.mouse_dist(view));
     }
 
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         for (_, group) in &mut self.groups {
             group.reset();
@@ -134,8 +128,6 @@ impl Groups {
         texture_context: &mut G2dTextureContext,
         stopwatch: &Stopwatch,
     ) {
-        let _s = ScopedDuration::new("Groups::load_cache");
-
         for p in 0..2 {
             for (_, group) in &mut self.groups {
                 if !group.load_cache(p, view, db, texture_context, stopwatch) {
@@ -156,8 +148,6 @@ impl Groups {
     }
 
     pub fn draw(&self, trans: [[f64; 3]; 2], view: &View, draw_state: &DrawState, g: &mut G2d) {
-        let _s = ScopedDuration::new("Groups::draw");
-
         for (_, group) in &self.groups {
             group.draw(trans, view, draw_state, g);
         }

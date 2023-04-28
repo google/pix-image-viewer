@@ -1,4 +1,4 @@
-// Copyright 2019 Google LLC
+// Copyright 2019-2023 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::stats;
 use crate::{File, Metadata, TileRef, E, R};
 use bincode::{deserialize, serialize};
+use log::*;
 use std::ops::Deref;
+use std::path::Path;
 
 static MAX_ID: &[u8] = b"_MAX_ID";
 static METADATA_PREFIX: char = 'M';
@@ -89,8 +90,8 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn open(path: &str) -> R<Self> {
-        info!("database path: {}", path);
+    pub fn open(path: &Path) -> R<Self> {
+        info!("database path: {:?}", path);
 
         let db = sled::open(path).map_err(E::DatabaseError)?;
 
@@ -98,16 +99,9 @@ impl Database {
     }
 
     pub fn get_metadata(&self, file: &File) -> R<Option<Metadata>> {
-        let _s = stats::ScopedDuration::new("Database::get_metadata");
-
         let k = Key::for_file(file);
 
         if let Some(v) = self.db.get(k.as_ref()).map_err(E::DatabaseError)? {
-            stats::record(
-                "metadata_size_bytes",
-                std::time::Duration::from_micros(v.len() as u64),
-            );
-
             let metadata: Metadata = deserialize(&*v).map_err(E::DecodeError)?;
 
             Ok(Some(metadata))
@@ -117,16 +111,9 @@ impl Database {
     }
 
     pub fn set_metadata(&self, file: &File, metadata: &Metadata) -> R<()> {
-        let _s = stats::ScopedDuration::new("Database::set_metadata");
-
         let k = Key::for_file(file);
 
         let encoded: Vec<u8> = serialize(metadata).map_err(E::EncodeError)?;
-
-        stats::record(
-            "metadata_size_bytes",
-            std::time::Duration::from_micros(encoded.len() as u64),
-        );
 
         self.db
             .insert(k.as_ref(), encoded)
@@ -136,8 +123,6 @@ impl Database {
     }
 
     pub fn set(&self, tile_ref: TileRef, data: &[u8]) -> R<()> {
-        let _s = stats::ScopedDuration::new("Database::set");
-
         let k = Key::for_thumb(tile_ref);
         self.db.insert(&k, data).map_err(E::DatabaseError)?;
 
@@ -145,8 +130,6 @@ impl Database {
     }
 
     pub fn get(&self, tile_ref: TileRef) -> R<Option<Data>> {
-        let _s = stats::ScopedDuration::new("Database::get");
-
         let k = Key::for_thumb(tile_ref);
         if let Some(v) = self.db.get(k.as_ref()).map_err(E::DatabaseError)? {
             Ok(Some(Data(v)))

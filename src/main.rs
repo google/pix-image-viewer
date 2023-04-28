@@ -1,4 +1,4 @@
-// Copyright 2019 Google LLC
+// Copyright 2019-2023 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,28 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use]
-extern crate lazy_static;
-
 mod database;
 mod group;
 mod groups;
 mod image;
-mod stats;
 mod thumbnailer;
 mod vec;
 mod view;
 
 use crate::groups::Groups;
-use crate::stats::ScopedDuration;
 use boolinator::Boolinator;
-use clap::Arg;
+use log::*;
 use piston_window::*;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -277,7 +269,6 @@ struct App {
     thumbnailer: Thumbnailer,
 
     // Graphics state
-    new_window_settings: Option<WindowSettings>,
     window_settings: WindowSettings,
     window: PistonWindow,
     texture_context: G2dTextureContext,
@@ -337,7 +328,6 @@ impl App {
 
             thumbnailer,
 
-            new_window_settings: None,
             window_settings,
             window,
             texture_context,
@@ -353,20 +343,7 @@ impl App {
         }
     }
 
-    fn rebuild_window(&mut self, new_settings: WindowSettings) {
-        self.groups.reset();
-
-        self.window_settings = new_settings.clone();
-        self.window = new_settings.build().expect("new window build");
-
-        self.focus = None;
-        self.panning = false;
-        self.cursor_captured = false;
-        self.zooming = None;
-    }
-
     fn update(&mut self, args: UpdateArgs) {
-        let _s = ScopedDuration::new("App::update");
         let stopwatch = Stopwatch::from_millis(10);
 
         let grid_size = vec2_u32(self.view.grid_size);
@@ -392,8 +369,6 @@ impl App {
     }
 
     pub fn recv_thumbs(&mut self) {
-        let _s = ScopedDuration::new("App::recv_thumbs");
-
         for (i, metadata_res) in self.thumbnailer.recv() {
             self.groups.update_metadata(i, metadata_res);
         }
@@ -483,12 +458,19 @@ impl App {
                 self.reset();
             }
 
-            (ButtonState::Press, Button::Keyboard(Key::F)) => {
-                let mut settings = self.window_settings.clone();
-                settings.set_fullscreen(!settings.get_fullscreen());
-                self.new_window_settings = Some(settings);
-            }
+            //(ButtonState::Press, Button::Keyboard(Key::F)) => {
+            //    // TODO: this crashes with: thread 'main' panicked at 'Creating EventLoop multiple
+            //    // times is not supported.',
+            //    self.window.set_should_close(true);
+            //    self.window_settings.set_fullscreen(true);
+            //    self.window = self.window_settings.build().unwrap();
 
+            //    self.groups.reset();
+            //    self.focus = None;
+            //    self.panning = false;
+            //    self.cursor_captured = false;
+            //    self.zooming = None;
+            //}
             (ButtonState::Press, Button::Keyboard(Key::T)) => {
                 self.cursor_captured = !self.cursor_captured;
                 self.window.set_capture_cursor(self.cursor_captured);
@@ -557,15 +539,7 @@ impl App {
 
     fn run(&mut self) {
         loop {
-            let _s = ScopedDuration::new("run_loop");
-
-            if let Some(new_settings) = self.new_window_settings.take() {
-                self.rebuild_window(new_settings);
-            }
-
             if let Some(e) = self.window.next() {
-                let _s = ScopedDuration::new("run_loop_next");
-
                 e.update(|args| {
                     self.update(*args);
                 });
@@ -592,7 +566,6 @@ impl App {
                 let v = &self.view;
                 let groups = &self.groups;
                 self.window.draw_2d(&e, |c, g, _device| {
-                    let _s = ScopedDuration::new("draw_2d");
                     Self::draw_2d(&e, c, g, v, groups);
                 });
             } else {
@@ -609,9 +582,7 @@ pub struct File {
     file_size: u64,
 }
 
-fn find_images(dirs: Vec<String>) -> Vec<Arc<File>> {
-    let _s = ScopedDuration::new("find_images");
-
+fn find_images(dirs: Vec<PathBuf>) -> Vec<Arc<File>> {
     let mut ret = Vec::new();
 
     for dir in dirs {
@@ -682,65 +653,47 @@ fn find_images(dirs: Vec<String>) -> Vec<Arc<File>> {
     ret
 }
 
+use clap::Parser;
+use std::path::PathBuf;
+
+#[derive(Parser, Debug)]
+struct Args {
+    /// Set number of background thumbnailer threads.
+    #[arg(long, value_name = "COUNT")]
+    threads: Option<usize>,
+
+    /// Set database path.
+    #[arg(long, value_name = "PATH")]
+    db_path: Option<PathBuf>,
+
+    /// Images or directories to open.
+    #[arg(value_name = "PATH", default_value = ".")]
+    paths: Vec<PathBuf>,
+}
+
 fn main() {
     env_logger::init();
 
-    /////////////////
-    // PARSE FLAGS //
-    /////////////////
+    let args = Args::parse();
 
-    let matches = clap::App::new("pix")
-        .version("1.0")
-        .author("Mason Larobina <mason.larobina@gmail.com>")
-        .arg(
-            Arg::with_name("paths")
-                .value_name("PATHS")
-                .multiple(true)
-                .help("Images or directories of images to view."),
-        )
-        .arg(
-            Arg::with_name("threads")
-                .long("--threads")
-                .value_name("COUNT")
-                .takes_value(true)
-                .required(false)
-                .help("Set number of background thumbnailer threads."),
-        )
-        .arg(
-            Arg::with_name("db_path")
-                .long("--db_path")
-                .value_name("PATH")
-                .takes_value(true)
-                .help("Alternate thumbnail database path."),
-        )
-        .get_matches();
-
-    let paths = matches
-        .values_of_lossy("paths")
-        .unwrap_or_else(|| vec![String::from(".")]);
-    info!("Paths: {:?}", paths);
-
-    let thumbnailer_threads: usize = if let Some(threads) = matches.value_of("threads") {
-        threads.parse().expect("not an int")
+    let thumbnailer_threads: usize = if let Some(threads) = args.threads {
+        threads
     } else {
         num_cpus::get()
     };
     info!("Thumbnailer threads {}", thumbnailer_threads);
 
-    let db_path: String = if let Some(db_path) = matches.value_of("db_path") {
-        db_path.to_owned()
+    let db_path: PathBuf = if let Some(db_path) = args.db_path {
+        db_path
     } else {
         let mut db_path = dirs_next::cache_dir().expect("cache dir");
         db_path.push("pix/thumbs.db");
-        db_path.to_str().expect("db path as str").to_owned()
+        db_path
     };
-    info!("Database path: {}", db_path);
+    info!("Database path: {:?}", db_path);
 
-    /////////
-    // RUN //
-    /////////
-
-    let files = find_images(paths);
+    info!("Paths: {:?}", args.paths);
+    let files = find_images(args.paths);
     if files.is_empty() {
         error!("No files found, exiting.");
         std::process::exit(1);
@@ -751,7 +704,6 @@ fn main() {
     let db = Arc::new(database::Database::open(&db_path).expect("db open"));
 
     let images: Vec<image::Image> = {
-        let _s = ScopedDuration::new("main::load_metadata");
         files
             .into_par_iter()
             .enumerate()
@@ -773,10 +725,5 @@ fn main() {
 
     let thumbnailer = Thumbnailer::new(Arc::clone(&db), uid_base, thumbnailer_threads);
 
-    {
-        let _s = ScopedDuration::new("uptime");
-        App::new(images, Arc::clone(&db), thumbnailer).run();
-    }
-
-    stats::dump();
+    App::new(images, Arc::clone(&db), thumbnailer).run();
 }
